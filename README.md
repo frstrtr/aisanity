@@ -1,17 +1,17 @@
 # aisanity — AI Memory Guardian
 
-A pure-LLM tool that validates AI suggestions against a **plain-text project
+A lightweight tool that validates AI suggestions against a **plain-text project
 memory file** (`.ai-memory.md`). It catches context drift, hallucinations, and
 forgotten constraints by asking a local LLM to compare every suggestion against
 the documented source of truth.
 
-**Zero external dependencies** — Python stdlib only.
+**Zero external dependencies** — pure TypeScript/Node.js for the VS Code
+extension, Python stdlib for the CLI.
 
 ## Problem
 
-Advanced models (Claude, GPT, etc.) eventually exhibit context drift during long
-sessions, causing them to:
-- Forget project-specific tooling (e.g., using `python3` when the project requires `pypy3`)
+Advanced models (Claude, GPT, etc.) exhibit context drift during long sessions:
+- Forget project-specific tooling (e.g., using `pip` when the project requires `uv`)
 - Hallucinate packages, commands, or architecture patterns
 - Revert to defaults that violate project constraints
 
@@ -22,18 +22,20 @@ A lightweight guardian that:
 2. Sends the memory + the AI suggestion to a **local Ollama LLM** on the LAN
 3. The LLM compares the suggestion against every documented rule
 4. Returns a structured verdict (pass/fail + specific violations)
-5. Falls back to **GitHub Models API** (free via Copilot subscription) when Ollama is unreachable
+5. **Auto-corrects** the response if violations are found (configurable)
+6. Falls back to **GitHub Models API** (free via Copilot subscription) when Ollama is unreachable
 
 ## Architecture
 
 ```
 ┌─────────────────┐     ┌───────────────────┐     ┌──────────────┐
-│  AI Suggestion  │────▶│  guardian.py      │────▶│  Verdict     │
+│  AI Suggestion  │────▶│  aisanity         │────▶│  Verdict     │
 │  (text, code,   │     │                   │     │  (pass/fail  │
 │   command)      │     │  1. Load memory   │     │  + violations│
-└─────────────────┘     │  2. Build prompt  │     └──────────────┘
-                        │  3. Call LLM      │
+└─────────────────┘     │  2. Build prompt  │     │  + correction│
+                        │  3. Call LLM      │     └──────────────┘
                         │  4. Parse verdict │
+                        │  5. Auto-correct  │
                         └────────┬──────────┘
                                  │
                         ┌────────┴────────┐
@@ -50,85 +52,158 @@ A lightweight guardian that:
            └─────────────┘             └───────────────┘
 ```
 
+## Three Integration Layers
+
+aisanity provides three ways to integrate, from simplest to most flexible:
+
+### 1. Model Picker (v0.5) — simplest
+
+Select **aisanity** from the VS Code model dropdown. ALL chat requests from ANY
+participant (Copilot, workspace, etc.) get proxied through validation.
+
+```
+VS Code Model Picker → Manage Models → Add aisanity
+→ Configure Ollama URL + Model → Done
+```
+
+**How it works:**
+- Aisanity appears as a selectable model in the chat model picker
+- Every response is generated via Ollama, validated against `.ai-memory.md`
+- Violations are auto-corrected before you see the response
+- No `@aisanity` prefix needed — just pick the model and forget about it
+
+### 2. @aisanity Chat Participant (v0.3) — per-conversation
+
+Type `@aisanity` before your question to route it through the guardian:
+
+```
+@aisanity how do I install flask in this project?
+```
+
+**How it works:**
+1. Forwards your question to the selected Copilot model (with project memory injected)
+2. Collects the FULL response
+3. Validates against `.ai-memory.md` via local Ollama
+4. If violations → shows them, auto-corrects, re-validates
+5. If clean → streams the original with a ✅ badge
+
+### 3. MCP Tools (v0.1) — voluntary
+
+The AI agent can call `aisanity_validate`, `aisanity_fix`, or `aisanity_memory`
+tools during conversations. This is voluntary — the model decides when to validate.
+
+**MCP Tools:**
+
+| Tool | Purpose |
+|------|---------|
+| `aisanity_validate` | Check a suggestion against `.ai-memory.md` — returns pass/fail + violations |
+| `aisanity_fix` | Validate + return correction prompt if violations found |
+| `aisanity_memory` | Read the project memory (so the AI can proactively follow rules) |
+
+---
+
 ## Installation
 
-### Option 1: VS Code Extension (easiest)
-
-Install the `.vsix` from the `vscode-extension/` directory:
+### Option 1: VS Code Extension (recommended)
 
 ```bash
-code --install-extension vscode-extension/aisanity-0.1.0.vsix
+code --install-extension vscode-extension/aisanity-0.5.0.vsix
 ```
 
-This gives you:
-- **Auto-registered MCP server** — AI agents see aisanity tools immediately
-- **Command Palette** — `aisanity: Init Project`, `Show Memory`, `Validate Selection`
-- **Status bar indicator** — shows whether the project has a memory file
-- **Settings UI** — configure Ollama URL, model, and fallback from VS Code settings
+Then:
+1. Run **aisanity: Init Project** from the Command Palette (Ctrl+Shift+P)
+2. Edit `.ai-memory.md` with your project rules
+3. **To use as a model:** Go to the model picker → Manage Models → click **+** next to aisanity → configure Ollama URL + model → select the model
+4. **To use as a participant:** Type `@aisanity` before your question
+5. **MCP tools** are auto-registered — no manual config needed
 
-Then run **aisanity: Init Project** from the Command Palette to create your `.ai-memory.md`.
-
-### Option 2: MCP Server (manual)
-
-The MCP server lets your AI agent (Claude, Copilot) call aisanity
-**automatically** during conversations — no manual copy-paste needed.
-
-#### Global install (all projects)
+### Option 2: CLI (standalone)
 
 ```bash
-python3 guardian.py install-global
+git clone https://github.com/frstrtr/aisanity.git
+cd aisanity
+python3 guardian.py "pip install flask"
 ```
 
-This adds aisanity to VS Code's dedicated user MCP config (`~/.config/Code/User/mcp.json`).
-Every project gets aisanity automatically — you only need a `.ai-memory.md` per project.
+See [install.md](install.md) for detailed CLI/MCP setup.
 
-#### Per-project install
+---
 
-```bash
-cd ~/Github/my-project
-python3 /path/to/aisanity/guardian.py init
+## Settings
+
+All settings are under `aisanity.*` in VS Code settings:
+
+### Connection Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `aisanity.ollamaUrl` | `http://192.168.86.45:11434` | Ollama server URL |
+| `aisanity.ollamaModel` | `devstral:24b` | Ollama model for generation + validation |
+| `aisanity.githubModel` | `openai/gpt-4o-mini` | GitHub Models fallback model |
+| `aisanity.memoryFile` | `.ai-memory.md` | Project memory filename |
+
+### Behavior Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `aisanity.enableValidation` | `true` | Enable/disable validation of AI responses |
+| `aisanity.enableAutoCorrection` | `true` | Auto-correct when violations found (disagreement flow) |
+| `aisanity.maxCorrectionRetries` | `1` | Max correction attempts (0 = report only, up to 3) |
+| `aisanity.showValidationBadges` | `true` | Show ✅/⚠️ status badges in responses |
+| `aisanity.validationBackend` | `ollama` | Which backend: `ollama`, `github`, or `auto` |
+
+### Disagreement Flow
+
+When `enableAutoCorrection` is `true` and violations are found:
+
+```
+AI generates response
+    ↓
+aisanity validates against .ai-memory.md
+    ↓
+❌ Violations found!
+    ↓
+aisanity sends violations back to the model
+    ↓
+Model generates corrected response
+    ↓
+aisanity re-validates (up to maxCorrectionRetries times)
+    ↓
+✅ Clean → show to user
+⚠️ Still has issues → show with warning
 ```
 
-This creates both `.ai-memory.md` (template) and `.vscode/mcp.json` in the project.
+Set `enableAutoCorrection: false` or `maxCorrectionRetries: 0` to disable this
+and just see the violations report with the original response.
 
-### Custom instructions for the AI
+---
 
-Add to Claude's custom instructions (Settings → Copilot → Chat → Instructions):
+## Ollama Server Setup
 
-> Before finalizing any response containing code or commands, call
-> `aisanity_validate` to check it against project memory. If violations
-> are found, use `aisanity_fix` and revise before presenting.
-
-See [install.md](install.md) for detailed setup.
-
-## Setup (CLI fallback)
-
-### 1. Ollama Server (primary — required)
-
-The tool expects an Ollama server on the LAN at `192.168.86.45:11434`.
+The extension expects an Ollama server on the LAN. Default: `192.168.86.45:11434`.
 
 ```bash
-# Verify the server is reachable
+# Verify connectivity
 curl http://192.168.86.45:11434/api/version
+
+# Pull the default model
+ollama pull devstral:24b
 ```
 
-Default model: `devstral:24b` (code-focused, fast, accurate for rule validation).
+### Available Models (on LAN server)
 
-### 2. GitHub Token (fallback — optional)
+| Model | Size | Notes |
+|-------|------|-------|
+| `devstral:24b` | 14.3 GB | **Default** — code-focused, fast |
+| `gemma3:27b` | 17.4 GB | Strong general reasoning |
+| `qwen2.5:32b` | 19.9 GB | Strong reasoning |
+| `qwq:latest` | 19.9 GB | Thinking model |
+| `llama3.3:70b` | 42.5 GB | High accuracy, slower |
+| `deepseek-r1:671b` | 404 GB | Maximum capability |
 
-Set a GitHub PAT with `models:read` scope for the fallback backend:
+---
 
-```bash
-export GITHUB_TOKEN="ghp_your_token_here"
-```
-
-### 3. Memory File
-
-Create a `.ai-memory.md` file in your project root. This is plain Markdown —
-write your project's requirements, forbidden patterns, and common mistakes as
-you would in any document. The LLM reads it as-is.
-
-## Usage
+## CLI Usage (fallback)
 
 ### Validate a command
 ```bash
@@ -155,17 +230,7 @@ python3 guardian.py --json pip install flask
 python3 guardian.py --ollama-model qwen2.5:32b --ollama-url http://10.0.0.5:11434 pip install flask
 ```
 
-## Available Ollama Models (on LAN server)
-
-| Model | Params | Quant | Size | Notes |
-|-------|--------|-------|------|-------|
-| `devstral:24b` | 23.6B | Q4_K_M | 14.3 GB | **Default** — code-focused, fast |
-| `gemma3:27b` | 27.4B | Q4_K_M | 17.4 GB | Strong general reasoning |
-| `qwen2.5:32b` | 32.8B | Q4_K_M | 19.9 GB | Strong reasoning |
-| `qwq:latest` | 32.8B | Q4_K_M | 19.9 GB | Thinking model |
-| `devstral:24b` | 23.6B | Q4_K_M | 14.3 GB | Code-focused |
-| `llama3.3:70b` | 70.6B | Q4_K_M | 42.5 GB | High accuracy, slower |
-| `deepseek-r1:671b` | 671B | Q4_K_M | 404 GB | Maximum capability |
+---
 
 ## Example Output
 
@@ -178,5 +243,33 @@ python3 guardian.py --ollama-model qwen2.5:32b --ollama-url http://10.0.0.5:1143
     Expected:    import urllib.request
     Explanation: Project requires stdlib only — no external packages
 
-  [backend: ollama | model: gemma3:27b]
+  [backend: ollama | model: devstral:24b]
 ```
+
+---
+
+## Project Structure
+
+```
+aisanity/
+├── .ai-memory.md          # aisanity's own project memory
+├── guardian.py             # Python CLI tool + library (standalone)
+├── mcp_server.py           # Python MCP server (standalone)
+├── install.md              # Detailed installation guide
+├── README.md               # This file
+└── vscode-extension/
+    ├── package.json        # Extension manifest
+    ├── src/
+    │   ├── extension.ts    # VS Code activation + commands
+    │   ├── guardian.ts     # Core validation library (TypeScript port)
+    │   ├── mcpServer.ts    # MCP server (TypeScript, standalone)
+    │   ├── chatParticipant.ts  # @aisanity chat participant
+    │   └── modelProvider.ts    # Language model provider (model picker)
+    ├── dist/               # Compiled bundles
+    ├── esbuild.js          # Build script
+    └── *.vsix              # Packaged extension
+```
+
+## License
+
+MIT

@@ -1,5 +1,25 @@
 # aisanity — VS Code Extension Changelog
 
+## 0.5.0 — Settings, Model Picker Fix, Updated Docs
+
+- **Model picker now configurable** — added `configuration` schema to the
+  `languageModelChatProviders` contribution point so users can set Ollama URL
+  and model directly from Manage Models UI (no extension settings needed)
+- **New behavior settings:**
+  - `enableValidation` — master switch for validation (default: true)
+  - `enableAutoCorrection` — toggle disagreement flow (default: true)
+  - `maxCorrectionRetries` — 0–3 correction attempts (default: 1)
+  - `showValidationBadges` — toggle ✅/⚠️ badges (default: true)
+  - `validationBackend` — choose `ollama`, `github`, or `auto` (default: ollama)
+- **Per-group Ollama config** — model picker configuration takes priority over
+  extension settings, allowing different configs per group
+- **Correction retry loop** — configurable multi-attempt correction instead of
+  single-pass
+- **Report-only mode** — set `enableAutoCorrection: false` to see violations
+  without auto-correction
+- **Updated docs** — comprehensive README, install.md, extension README with
+  model picker setup instructions, settings reference, and architecture diagrams
+
 ## 0.4.0 — Model Provider (select aisanity from model dropdown)
 
 - **aisanity appears in the model picker** — select it as your model and ALL

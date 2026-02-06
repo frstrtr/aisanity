@@ -103,15 +103,24 @@ export const chatHandler: vscode.ChatRequestHandler = async (
     stream: vscode.ChatResponseStream,
     token: vscode.CancellationToken,
 ): Promise<vscode.ChatResult> => {
+    const config = getConfig();
+    const enableValidation = config.get<boolean>("enableValidation", true);
+    const enableAutoCorrection = config.get<boolean>("enableAutoCorrection", true);
+    const maxRetries = config.get<number>("maxCorrectionRetries", 1);
+    const showBadges = config.get<boolean>("showValidationBadges", true);
     const memoryPath = findMemoryFile();
 
-    // ── No memory file → pass through with a note
-    if (!memoryPath) {
-        stream.markdown(
-            "⚠️ *No `.ai-memory.md` found in workspace — " +
-            "running without aisanity validation. " +
-            "Use `aisanity: Init Project` to create one.*\n\n",
-        );
+    // ── No memory file or validation disabled → pass through
+    if (!memoryPath || !enableValidation) {
+        if (!memoryPath) {
+            stream.markdown(
+                "⚠️ *No `.ai-memory.md` found in workspace — " +
+                "running without aisanity validation. " +
+                "Use `aisanity: Init Project` to create one.*\n\n",
+            );
+        } else if (!enableValidation) {
+            stream.markdown("🔇 *aisanity validation disabled*\n\n");
+        }
         const history = buildHistory(context);
         history.push(vscode.LanguageModelChatMessage.User(request.prompt));
         const resp = await request.model.sendRequest(history, {}, token);
@@ -179,19 +188,37 @@ export const chatHandler: vscode.ChatRequestHandler = async (
     // ── Step 4a: Clean — stream the original response
     if (verdict.is_valid) {
         stream.markdown(modelResponse);
-        stream.markdown(
-            "\n\n---\n✅ *Validated by aisanity — complies with project memory*\n",
-        );
+        if (showBadges) {
+            stream.markdown(
+                "\n\n---\n✅ *Validated by aisanity — complies with project memory*\n",
+            );
+        }
         return { metadata: { validated: true, violations: 0 } };
     }
 
-    // ── Step 4b: Violations found — auto-correct
+    // ── Step 4b: Violations found
+    if (!enableAutoCorrection || maxRetries === 0) {
+        // Just report violations and show original
+        if (showBadges) {
+            stream.markdown(formatViolationsMarkdown(verdict));
+        }
+        stream.markdown(modelResponse);
+        if (showBadges) {
+            stream.markdown(
+                "\n\n---\n⚠️ *Auto-correction disabled — review violations above manually*\n",
+            );
+        }
+        return { metadata: { validated: true, violations: verdict.violations.length, corrected: false } };
+    }
+
     stream.progress(
         `Found ${verdict.violations.length} violation(s) — requesting correction…`,
     );
 
     // Show what was caught
-    stream.markdown(formatViolationsMarkdown(verdict));
+    if (showBadges) {
+        stream.markdown(formatViolationsMarkdown(verdict));
+    }
 
     // Build correction request
     const violationsSummary = verdict.violations

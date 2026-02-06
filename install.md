@@ -2,110 +2,121 @@
 
 ## Prerequisites
 
-- Python 3.7+ (stdlib only — zero dependencies)
-- Ollama server accessible on the LAN at `192.168.86.45:11434`
+- Ollama server accessible on the LAN (default: `192.168.86.45:11434`)
+- VS Code 1.99+ (for extension features)
+- (Optional) Python 3.7+ for CLI usage
 - (Optional) GitHub account for fallback model access
 
 ---
 
-## Quick Install: VS Code Extension
-
-The simplest way to install aisanity is as a VS Code extension:
+## Quick Install: VS Code Extension (recommended)
 
 ```bash
 cd ~/Github/aisanity
-code --install-extension vscode-extension/aisanity-0.1.0.vsix
+code --install-extension vscode-extension/aisanity-0.5.0.vsix
 ```
 
-This gives you:
-- **Auto-registered MCP server** — no manual `mcp.json` editing
-- **Command Palette** commands for init, validate, and showing memory
-- **Status bar indicator** for memory file presence
-- **Settings UI** for Ollama URL, model, and fallback configuration
+After installing:
 
-After installing, open any project and run **aisanity: Init Project** from the
-Command Palette (Ctrl+Shift+P) to create your `.ai-memory.md`.
+### Option A: Use as a model (simplest — all requests validated)
 
-**That's it!** The rest of this guide covers manual/CLI installation.
+1. Open the Chat view (Ctrl+Shift+I)
+2. Click the **model picker dropdown** at the top of the chat
+3. Click **Manage Models** (gear icon)
+4. Find **aisanity — AI Memory Guardian** in the provider list
+5. Click **+** to add a new configuration
+6. Enter your Ollama URL: `http://192.168.86.45:11434`
+7. Enter your Ollama model: `devstral:24b`
+8. Click OK — the model now appears in your model picker
+9. **Select it** as your active model
+10. Start chatting — every response is generated via Ollama and validated!
+
+### Option B: Use as a chat participant (per-conversation)
+
+Type `@aisanity` before your question in chat:
+
+```
+@aisanity how do I install flask in this project?
+```
+
+This routes the question through Copilot's model but validates the response
+against your project memory before showing it.
+
+### Option C: MCP tools (voluntary, model-initiated)
+
+The MCP server is auto-registered. Add these custom instructions
+(Settings → Copilot → Chat → Instructions):
+
+> Before finalizing any response containing code or commands, call
+> `aisanity_validate` to check it against project memory. If violations
+> are found, use `aisanity_fix` and revise before presenting.
 
 ---
 
-## Manual Install
+## Configuring Behavior
 
-### Step 1: Clone the repository
+Open VS Code Settings (Ctrl+,) and search for `aisanity`:
 
-```bash
-cd ~/Github
-git clone https://github.com/frstrtr/aisanity.git
-cd ~/Github/aisanity
+### Connection Settings
+
+| Setting | Default | What it does |
+|---------|---------|-------------|
+| `aisanity.ollamaUrl` | `http://192.168.86.45:11434` | Your Ollama server address |
+| `aisanity.ollamaModel` | `devstral:24b` | Which Ollama model to use |
+| `aisanity.githubModel` | `openai/gpt-4o-mini` | Fallback model when Ollama is down |
+| `aisanity.memoryFile` | `.ai-memory.md` | Memory file name |
+
+### Behavior Settings
+
+| Setting | Default | What it does |
+|---------|---------|-------------|
+| `aisanity.enableValidation` | `true` | Master switch for validation |
+| `aisanity.enableAutoCorrection` | `true` | Auto-fix violations (disagreement flow) |
+| `aisanity.maxCorrectionRetries` | `1` | How many fix attempts (0 = report only, max 3) |
+| `aisanity.showValidationBadges` | `true` | Show ✅/⚠️ in responses |
+| `aisanity.validationBackend` | `ollama` | `ollama`, `github`, or `auto` (try Ollama first) |
+
+### Example: Report-only mode (no auto-correction)
+
+```json
+{
+    "aisanity.enableAutoCorrection": false
+}
 ```
 
-## Step 2: Make it available system-wide
+Violations are reported but the original response is shown unchanged.
 
-```bash
-# Make the script executable
-chmod +x ~/Github/aisanity/guardian.py
+### Example: Maximum strictness
 
-# Symlink to a directory in your PATH
-sudo ln -sf ~/Github/aisanity/guardian.py /usr/local/bin/aisanity
+```json
+{
+    "aisanity.maxCorrectionRetries": 3,
+    "aisanity.enableAutoCorrection": true
+}
 ```
 
-Verify it works:
+Up to 3 correction attempts until the response passes validation.
 
-```bash
-aisanity --help
-```
+### Example: Disable validation entirely (pure Ollama proxy)
 
-## Step 3: Verify Ollama server connectivity
-
-```bash
-# Check the server is reachable
-curl -s http://192.168.86.45:11434/api/version
-
-# List available models
-curl -s http://192.168.86.45:11434/api/tags | python3 -c "
-import sys, json
-for m in json.load(sys.stdin)['models']:
-    print(f\"  {m['name']:40s} {m['details'].get('parameter_size','?'):>10s}\")
-"
-```
-
-## Step 4: (Optional) Set up GitHub Models fallback
-
-If the Ollama server goes down, aisanity falls back to free models via GitHub.
-
-1. Go to https://github.com/settings/tokens
-2. Create a **Personal Access Token** (classic or fine-grained)
-3. Grant the **`models:read`** scope
-4. Add it to your shell profile:
-
-```bash
-# Add to ~/.bashrc or ~/.zshrc
-export GITHUB_TOKEN="ghp_your_token_here"
-```
-
-Reload your shell:
-
-```bash
-source ~/.bashrc
+```json
+{
+    "aisanity.enableValidation": false
+}
 ```
 
 ---
 
-## Using aisanity in a project
+## Creating a Project Memory File
 
-### Step A: Create a memory file
+Run **aisanity: Init Project** from the Command Palette, or create `.ai-memory.md` manually:
 
-In the root of your project, create `.ai-memory.md`:
-
-```bash
-cd ~/Github/my-project
-cat > .ai-memory.md << 'EOF'
+```markdown
 # PROJECT MEMORY — my-project
 
 ## Identity
 - Project: my-project
-- Purpose: Brief description of what the project does
+- Purpose: Brief description
 
 ## Environment
 - Language: Python 3.11
@@ -120,11 +131,10 @@ cat > .ai-memory.md << 'EOF'
 
 ### Code Style
 - REQUIRED: Type hints on all function signatures
-- REQUIRED: Docstrings on all public functions
 - FORBIDDEN: Any use of `print()` for logging — use `logging` module
 
 ## Forbidden Patterns
-- Never use `requests` library — use `httpx` (async-first)
+- Never use `requests` library — use `httpx`
 - Never use `os.path` — use `pathlib.Path`
 - Never hardcode secrets — use environment variables
 
@@ -133,102 +143,110 @@ cat > .ai-memory.md << 'EOF'
 |-------|---------|-----|
 | `pip install X` | `uv add X` | Project uses uv |
 | `import requests` | `import httpx` | Async-first HTTP |
-| `os.path.join(a, b)` | `Path(a) / b` | Modern path handling |
-EOF
 ```
 
-### Step B: Validate AI suggestions
+The memory file is **plain Markdown** — write your rules however you want.
+The LLM reads it as-is and checks every AI response against it.
+
+---
+
+## Ollama Server Setup
+
+### Check connectivity
 
 ```bash
-# Validate a single command
-aisanity "pip install flask"
-
-# Validate multi-line AI output (paste or pipe)
-echo 'import requests
-response = requests.get("https://api.example.com")
-print(response.json())' | aisanity --check
-
-# Validate AND get correction instructions to feed back to the AI
-echo 'import requests
-response = requests.get("https://api.example.com")
-print(response.json())' | aisanity --check --fix
-
-# JSON output for scripting / automation
-aisanity --json "pip install flask"
+curl -s http://192.168.86.45:11434/api/version
 ```
 
-### Step C: Use `--fix` to correct AI responses
-
-When `--fix` is used, aisanity doesn't just report violations — it generates
-a **correction prompt** you can paste back into the AI chat to fix its response:
+### Pull the recommended model
 
 ```bash
-$ aisanity --fix "pip install flask"
+ollama pull devstral:24b
+```
 
-❌ FAILED — violations detected!
-  ...
+### Available models
 
-📝 CORRECTION PROMPT (paste this back to the AI):
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Your previous suggestion violates the following project rules:
+| Model | Size | Best for |
+|-------|------|----------|
+| `devstral:24b` | 14.3 GB | **Default** — code-focused, fast |
+| `gemma3:27b` | 17.4 GB | General reasoning |
+| `qwen2.5:32b` | 19.9 GB | Strong multilingual |
+| `qwq:latest` | 19.9 GB | Deep thinking |
+| `llama3.3:70b` | 42.5 GB | High accuracy, slower |
+| `deepseek-r1:671b` | 404 GB | Maximum capability |
 
-1. [Package Manager] You used `pip install flask` but this project
-   requires `uv`. Use `uv add flask` instead.
+---
 
-Please revise your response to comply with all project requirements
-documented in .ai-memory.md.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+## GitHub Token (fallback — optional)
+
+If the Ollama server goes down, aisanity falls back to free models via GitHub.
+
+1. Go to https://github.com/settings/tokens
+2. Create a **Personal Access Token** with **`models:read`** scope
+3. Add to your shell profile:
+
+```bash
+export GITHUB_TOKEN="ghp_your_token_here"
 ```
 
 ---
 
-## MCP Server — Automatic AI Validation in VS Code
+## Manual Install (CLI)
 
-This is the **recommended way** to use aisanity. Instead of running the CLI
-manually, the MCP server lets your AI agent (Claude, Copilot, etc.) call
-aisanity **automatically** during conversations.
-
-### How it works
-
-```
-You ask Claude a question in VS Code
-        ↓
-Claude generates a response
-        ↓
-Claude calls aisanity_validate automatically (MCP tool)
-        ↓
-aisanity checks response against .ai-memory.md via Ollama
-        ↓
-Violations found → Claude self-corrects before showing you
-No violations   → you see the response as normal
-```
-
-### Step 1: Install the MCP server
-
-**Option A: Global install (recommended — all projects get aisanity)**
+### Clone the repository
 
 ```bash
-cd ~/Github/aisanity
+cd ~/Github
+git clone https://github.com/frstrtr/aisanity.git
+cd aisanity
+```
+
+### Make it system-wide
+
+```bash
+chmod +x ~/Github/aisanity/guardian.py
+sudo ln -sf ~/Github/aisanity/guardian.py /usr/local/bin/aisanity
+```
+
+### CLI usage
+
+```bash
+# Validate a command
+aisanity "pip install flask"
+
+# Validate piped input
+echo "import requests" | aisanity --check
+
+# Validate with correction prompt
+echo "import requests" | aisanity --check --fix
+
+# JSON output
+aisanity --json "pip install flask"
+
+# Override model
+aisanity --ollama-model qwen2.5:32b "pip install flask"
+```
+
+---
+
+## MCP Server (manual setup)
+
+### Global install (all projects)
+
+```bash
 python3 guardian.py install-global
 ```
 
-This adds aisanity to VS Code's dedicated user MCP config
-(`~/.config/Code/User/mcp.json`). Every project automatically has access.
-
-**Option B: Per-project install**
+### Per-project install
 
 ```bash
 cd ~/Github/my-project
 python3 ~/Github/aisanity/guardian.py init
 ```
 
-This creates both `.ai-memory.md` (template) and `.vscode/mcp.json` in the
-project directory.
+### Manual MCP config
 
-**Manual setup** (if the commands above don't work for your setup):
-
-Create or edit `~/.config/Code/User/mcp.json` (global) or
-`.vscode/mcp.json` (per-project):
+Create `~/.config/Code/User/mcp.json`:
 
 ```json
 {
@@ -245,89 +263,16 @@ Create or edit `~/.config/Code/User/mcp.json` (global) or
 }
 ```
 
-### Step 2: Set Claude's custom instructions
-
-In VS Code, go to **Settings → Copilot → Chat → Instructions** and add:
-
-> Before finalizing any response that contains code, shell commands, or
-> architecture advice, call the `aisanity_validate` tool to check it against
-> the project memory. If violations are found, use `aisanity_fix` to get
-> correction instructions and revise your response before presenting it.
-> At the start of a new conversation, call `aisanity_memory` to load
-> the project's requirements.
-
-### Step 3: Verify it works
-
-1. Open a project that has a `.ai-memory.md` file
-2. Open VS Code Chat (Ctrl+Shift+I)
-3. Ask Claude to do something that would violate a rule
-4. Watch the tool calls in the chat — you should see `aisanity_validate` being invoked
-
-### MCP Tools Exposed
-
-| Tool | Purpose |
-|------|--------|
-| `aisanity_validate` | Check a suggestion against `.ai-memory.md` — returns pass/fail + violations |
-| `aisanity_fix` | Validate + return correction instructions if violations found |
-| `aisanity_memory` | Read the project memory (so the AI can proactively follow rules) |
-
-### Override MCP server defaults
-
-Edit the aisanity entry in `~/.config/Code/User/mcp.json` or `.vscode/mcp.json`:
-
-```json
-{
-  "servers": {
-    "aisanity": {
-      "type": "stdio",
-      "command": "python3",
-      "args": [
-        "/home/user0/Github/aisanity/mcp_server.py",
-        "--ollama-model", "qwen2.5:32b",
-        "--ollama-url", "http://10.0.0.5:11434"
-      ]
-    }
-  }
-}
-```
-
----
-
-## CLI Override defaults
-
-```bash
-# Use a different Ollama model
-aisanity --ollama-model qwen2.5:32b "some suggestion"
-
-# Point to a different Ollama server
-aisanity --ollama-url http://10.0.0.5:11434 "some suggestion"
-
-# Use a different memory file
-aisanity --memory /path/to/other-memory.md "some suggestion"
-
-# Use a different GitHub fallback model
-aisanity --github-model openai/gpt-4.1 "some suggestion"
-```
-
----
-
-## Available Ollama models on the LAN server
-
-| Model | Size | Best for |
-|-------|------|----------|
-| `devstral:24b` | 14.3 GB | **Default** — code-focused, fast |
-| `gemma3:27b` | 17.4 GB | General reasoning |
-| `qwen2.5:32b` | 19.9 GB | Strong multilingual |
-| `qwq:latest` | 19.9 GB | Deep thinking / chain-of-thought |
-| `llama3.3:70b` | 42.5 GB | High accuracy, slower |
-| `deepseek-r1:671b` | 404 GB | Maximum capability, slowest |
-
 ---
 
 ## Uninstall
 
+### VS Code Extension
+```bash
+code --uninstall-extension frstrtr.aisanity
+```
+
+### CLI
 ```bash
 sudo rm /usr/local/bin/aisanity
 ```
-
-That's it — no packages to remove, no config files outside your projects.
