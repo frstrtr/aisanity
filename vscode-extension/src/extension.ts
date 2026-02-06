@@ -3,6 +3,7 @@ import * as path from "path";
 import * as fs from "fs";
 import { MemoryGuardian, formatVerdict, formatCorrection } from "./guardian";
 import { chatHandler } from "./chatParticipant";
+import { AisanityModelProvider } from "./modelProvider";
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -291,6 +292,15 @@ export function activate(context: vscode.ExtensionContext): void {
         )
     );
 
+    // Register aisanity as a selectable model in the model picker
+    const modelProvider = new AisanityModelProvider();
+    context.subscriptions.push(
+        vscode.lm.registerLanguageModelChatProvider(
+            "aisanity",
+            modelProvider
+        )
+    );
+
     // Register @aisanity chat participant
     const participant = vscode.chat.createChatParticipant(
         "aisanity.guardian",
@@ -334,11 +344,12 @@ export function activate(context: vscode.ExtensionContext): void {
     watcher.onDidDelete(updateStatusBar);
     context.subscriptions.push(watcher);
 
-    // Refresh MCP when settings change
+    // Refresh providers when settings change
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration((e) => {
             if (e.affectsConfiguration("aisanity")) {
                 mcpProvider.refresh();
+                modelProvider.refresh();
                 updateStatusBar();
             }
         })

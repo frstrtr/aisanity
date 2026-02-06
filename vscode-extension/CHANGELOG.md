@@ -1,5 +1,16 @@
 # aisanity — VS Code Extension Changelog
 
+## 0.4.0 — Model Provider (select aisanity from model dropdown)
+
+- **aisanity appears in the model picker** — select it as your model and ALL
+  chat requests from ANY participant get proxied through validation
+- No need for `@aisanity` prefix — just pick the model and use chat normally
+- Uses Ollama directly for generation + validation in a single pipeline
+- Three integration layers now available:
+  - **Model picker** (v0.4) — transparent, all requests proxied automatically
+  - **`@aisanity` participant** (v0.3) — explicit, intercepts per conversation
+  - **MCP tools** (v0.1) — voluntary, model calls tools on its own
+
 ## 0.3.0 — Intercepting Chat Participant
 
 - **`@aisanity` chat participant** — a true intercepting proxy:
