@@ -2,7 +2,7 @@
   "name": "aisanity",
   "displayName": "aisanity — AI Memory Guardian",
   "description": "Catches AI context drift and hallucination by validating suggestions against a plain-text project memory file (.ai-memory.md)",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "publisher": "frstrtr",
   "license": "MIT",
   "repository": {
@@ -92,7 +92,7 @@
         "aisanity.ollamaModel": {
           "type": "string",
           "default": "devstral:24b",
-          "description": "Ollama model for validation (and generation when mainModel is 'ollama')"
+          "description": "Ollama model used as the checker/validator against project memory (also used for generation when mainModel is 'ollama')"
         },
         "aisanity.githubModel": {
           "type": "string",
@@ -139,8 +139,8 @@
         },
         "aisanity.mainModel": {
           "type": "string",
-          "default": "ollama",
-          "description": "Main model for response generation when aisanity is selected in model picker. Set to 'ollama' to use aisanity.ollamaModel directly, or a VS Code model ID (e.g. 'copilot:gpt-4o', 'copilot:claude-sonnet-4') to proxy through that model while aisanity handles validation only."
+          "default": "copilot:claude-opus-4.6",
+          "description": "Main model for response generation when aisanity is selected in model picker. Set to 'ollama' to use aisanity.ollamaModel directly, or a VS Code model ID (e.g. 'copilot:claude-opus-4.6', 'copilot:gpt-5.1') to proxy through that model while aisanity handles validation only."
         }
       }
     }

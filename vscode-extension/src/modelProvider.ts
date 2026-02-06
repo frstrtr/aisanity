@@ -6,17 +6,19 @@
  *
  *   1. Injects project memory into the system context
  *   2. Forwards to the "main model" for generation:
- *      - ollama (default) → direct Ollama HTTP call
- *      - copilot:gpt-4o, copilot:claude-sonnet-4, etc. → VS Code model API
+ *      - copilot:claude-opus-4.6 (default) → VS Code model API
+ *      - ollama → direct Ollama HTTP call
  *   3. Validates the full response against .ai-memory.md (always via Ollama)
  *   4. If violations → auto-corrects and re-validates (configurable)
  *   5. Streams the validated (or corrected) response back
  *
  * Key setting: aisanity.mainModel
- *   - "ollama" (default) → Ollama does both generation + validation
- *   - "copilot:gpt-4o"  → Copilot GPT-4o generates, Ollama validates
- *   - "copilot:claude-sonnet-4" → Claude generates, Ollama validates
+ *   - "copilot:claude-opus-4.6" (default) → Claude Opus 4.6 generates, Ollama validates
+ *   - "copilot:gpt-5.1"  → Copilot GPT-5.1 generates, Ollama validates
+ *   - "ollama" → Ollama does both generation + validation
  *   - Any VS Code model ID → that model generates, Ollama validates
+ *
+ * Checker/validator: always Ollama (default: devstral:24b)
  */
 
 import * as vscode from "vscode";
@@ -295,7 +297,7 @@ function resolveOllamaConfig(
 
 interface MainModelSelector {
     kind: "ollama" | "vscode-model";
-    /** For vscode-model: the raw model ID string (e.g. "copilot:gpt-4o") */
+    /** For vscode-model: the raw model ID string (e.g. "copilot:claude-opus-4.6") */
     id?: string;
     /** Parsed vendor (e.g. "copilot") */
     vendor?: string;
@@ -308,7 +310,7 @@ function parseMainModel(setting: string): MainModelSelector {
         return { kind: "ollama" };
     }
 
-    // Format: "vendor:family" (e.g. "copilot:gpt-4o") or just a model ID
+    // Format: "vendor:family" (e.g. "copilot:claude-opus-4.6") or just a model ID
     const parts = setting.split(":");
     if (parts.length >= 2) {
         return {
@@ -390,7 +392,7 @@ export class AisanityModelProvider
         this._groupConfig = (options as any).configuration;
 
         const config = getConfig();
-        const mainModelSetting = config.get<string>("mainModel", "ollama");
+        const mainModelSetting = config.get<string>("mainModel", "copilot:claude-opus-4.6");
         const { url: ollamaUrl, model: ollamaModel } = resolveOllamaConfig(this._groupConfig);
 
         const mainSelector = parseMainModel(mainModelSetting);
@@ -435,7 +437,7 @@ export class AisanityModelProvider
                 id: "aisanity-guardian",
                 name: modelName,
                 family: "aisanity",
-                version: "0.6.0",
+                version: "0.6.1",
                 tooltip: "Proxies through a main model with automatic project memory validation via Ollama",
                 detail: modelDetail,
                 maxInputTokens: maxInput,
@@ -458,7 +460,7 @@ export class AisanityModelProvider
         const config = getConfig();
         const { url: ollamaUrl, model: ollamaModel } = resolveOllamaConfig(this._groupConfig);
 
-        const mainModelSetting = config.get<string>("mainModel", "ollama");
+        const mainModelSetting = config.get<string>("mainModel", "copilot:claude-opus-4.6");
         const enableValidation = config.get<boolean>("enableValidation", true);
         const enableAutoCorrection = config.get<boolean>("enableAutoCorrection", true);
         const maxRetries = config.get<number>("maxCorrectionRetries", 1);
@@ -481,7 +483,7 @@ export class AisanityModelProvider
                 progress.report(new vscode.LanguageModelTextPart(
                     `❌ Main model "${mainModelSetting}" not found.\n\n` +
                     `Available models can be found via the model picker. ` +
-                    `Use the format \`vendor:family\` (e.g. \`copilot:gpt-4o\`, \`copilot:claude-sonnet-4\`), ` +
+                    `Use the format \`vendor:family\` (e.g. \`copilot:claude-opus-4.6\`, \`copilot:gpt-5.1\`), ` +
                     `or set to \`ollama\` to use Ollama directly.\n\n` +
                     `Falling back to Ollama (${ollamaModel})…\n\n---\n\n`,
                 ));
