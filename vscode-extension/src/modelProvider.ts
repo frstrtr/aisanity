@@ -335,18 +335,24 @@ export class AisanityModelProvider
             modelDetail = `${mainModelSetting} generates → Ollama ${ollamaModel} validates → auto-correct`;
         }
 
+        // Token limits should match or exceed the underlying model.
+        // Devstral: 127K ctx / 4K out, Copilot GPT-5: 128K/128K, etc.
+        // Use generous defaults so aisanity never artificially constrains.
+        const maxInput = 128_000;
+        const maxOutput = 128_000;
+
         return [
             {
                 id: "aisanity-guardian",
                 name: modelName,
                 family: "aisanity",
-                version: "0.5.1",
+                version: "0.6.0",
                 tooltip: "Proxies through a main model with automatic project memory validation via Ollama",
                 detail: modelDetail,
-                maxInputTokens: 32_000,
-                maxOutputTokens: 8_000,
+                maxInputTokens: maxInput,
+                maxOutputTokens: maxOutput,
                 capabilities: {
-                    toolCalling: false,
+                    toolCalling: true,
                     imageInput: false,
                 },
             },
