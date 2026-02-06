@@ -28,7 +28,7 @@ A lightweight guardian that:
 
 ```
 ┌─────────────────┐     ┌───────────────────┐     ┌──────────────┐
-│  AI Suggestion  │────▶│  guardian.py       │────▶│  Verdict     │
+│  AI Suggestion  │────▶│  guardian.py      │────▶│  Verdict     │
 │  (text, code,   │     │                   │     │  (pass/fail  │
 │   command)      │     │  1. Load memory   │     │  + violations│
 └─────────────────┘     │  2. Build prompt  │     └──────────────┘
@@ -41,8 +41,8 @@ A lightweight guardian that:
                         │ (plain text)    │    plain-text file
                         └─────────────────┘
                                  │
-                  ┌──────────────┼──────────────┐
-                  │ PRIMARY      │              │ FALLBACK
+                  ┌──────────────┼─────────────┐
+                  │ PRIMARY      │             │ FALLBACK
            ┌──────┴──────┐             ┌───────┴───────┐
            │  Ollama LLM │             │ GitHub Models │
            │  LAN server │             │ (free tier)   │
