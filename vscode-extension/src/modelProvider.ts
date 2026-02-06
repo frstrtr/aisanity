@@ -123,6 +123,75 @@ function ollamaChat(
     });
 }
 
+// ── Ollama /api/show — query model metadata ─────────────────────────────────
+
+interface OllamaModelInfo {
+    contextLength: number;
+}
+
+/**
+ * Call Ollama /api/show to get model metadata (context window, etc.).
+ * Returns defaults on any failure — never throws.
+ */
+function ollamaShow(baseUrl: string, model: string): Promise<OllamaModelInfo> {
+    const FALLBACK: OllamaModelInfo = { contextLength: 128_000 };
+
+    return new Promise((resolve) => {
+        try {
+            const parsed = new URL(`${baseUrl}/api/show`);
+            const isHttps = parsed.protocol === "https:";
+            const mod = isHttps ? https : http;
+
+            const payload = JSON.stringify({ model });
+
+            const reqOpts: http.RequestOptions = {
+                hostname: parsed.hostname,
+                port: parsed.port || (isHttps ? 443 : 80),
+                path: parsed.pathname,
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Content-Length": Buffer.byteLength(payload),
+                },
+                timeout: 10_000,
+            };
+
+            const req = mod.request(reqOpts, (res) => {
+                const chunks: Buffer[] = [];
+                res.on("data", (c: Buffer) => chunks.push(c));
+                res.on("end", () => {
+                    try {
+                        const body = Buffer.concat(chunks).toString("utf-8");
+                        const data = JSON.parse(body);
+                        const info = data.model_info ?? {};
+
+                        // Key varies by architecture: llama.context_length,
+                        // gemma3.context_length, qwen2.context_length, etc.
+                        let ctx = 0;
+                        for (const key of Object.keys(info)) {
+                            if (key.endsWith(".context_length") && typeof info[key] === "number") {
+                                ctx = info[key];
+                                break;
+                            }
+                        }
+
+                        resolve({ contextLength: ctx || FALLBACK.contextLength });
+                    } catch {
+                        resolve(FALLBACK);
+                    }
+                });
+            });
+
+            req.on("error", () => resolve(FALLBACK));
+            req.on("timeout", () => { req.destroy(); resolve(FALLBACK); });
+            req.write(payload);
+            req.end();
+        } catch {
+            resolve(FALLBACK);
+        }
+    });
+}
+
 // ── Convert VS Code messages to Ollama format ───────────────────────────────
 
 function convertToOllamaMessages(
@@ -322,7 +391,33 @@ export class AisanityModelProvider
 
         const config = getConfig();
         const mainModelSetting = config.get<string>("mainModel", "ollama");
-        const { model: ollamaModel } = resolveOllamaConfig(this._groupConfig);
+        const { url: ollamaUrl, model: ollamaModel } = resolveOllamaConfig(this._groupConfig);
+
+        const mainSelector = parseMainModel(mainModelSetting);
+
+        // ── Dynamically resolve token limits from the underlying model ──
+        let maxInput = 128_000;  // safe fallback
+        let maxOutput = 128_000;
+        let hasToolCalling = true;
+        let hasImageInput = false;
+
+        if (mainSelector.kind === "vscode-model") {
+            // Query the VS Code model API for its real limits
+            const resolved = await resolveVscodeModel(mainSelector);
+            if (resolved) {
+                maxInput = resolved.maxInputTokens;
+                // VS Code LanguageModelChat doesn't expose maxOutputTokens,
+                // so estimate as a fraction of input or use a generous default
+                maxOutput = maxInput;
+            }
+        } else {
+            // Query Ollama /api/show for the model's actual context window
+            const info = await ollamaShow(ollamaUrl, ollamaModel);
+            maxInput = info.contextLength;
+            // Ollama models typically produce up to ~4K output tokens,
+            // but the limit is the full context window
+            maxOutput = Math.min(info.contextLength, 32_768);
+        }
 
         // Build descriptive name based on main model
         let modelName: string;
@@ -335,12 +430,6 @@ export class AisanityModelProvider
             modelDetail = `${mainModelSetting} generates → Ollama ${ollamaModel} validates → auto-correct`;
         }
 
-        // Token limits should match or exceed the underlying model.
-        // Devstral: 127K ctx / 4K out, Copilot GPT-5: 128K/128K, etc.
-        // Use generous defaults so aisanity never artificially constrains.
-        const maxInput = 128_000;
-        const maxOutput = 128_000;
-
         return [
             {
                 id: "aisanity-guardian",
@@ -352,8 +441,8 @@ export class AisanityModelProvider
                 maxInputTokens: maxInput,
                 maxOutputTokens: maxOutput,
                 capabilities: {
-                    toolCalling: true,
-                    imageInput: false,
+                    toolCalling: hasToolCalling,
+                    imageInput: hasImageInput,
                 },
             },
         ];
