@@ -431,6 +431,192 @@ def format_correction(correction: str) -> str:
     )
 
 
+# ── Project Init ─────────────────────────────────────────────────────────────
+
+AISANITY_DIR = Path(__file__).resolve().parent
+
+MEMORY_TEMPLATE = """\
+# PROJECT MEMORY — {project_name}
+
+## Identity
+- Project: {project_name}
+- Purpose: (describe what this project does)
+
+## Environment
+- Language: (e.g., Python 3.11, TypeScript 5, Go 1.22)
+- Package manager: (e.g., pip, uv, pnpm, cargo)
+- Framework: (e.g., FastAPI, Next.js, none)
+- Runtime: (e.g., CPython, Node.js 20, PyPy)
+
+## Critical Requirements
+### (Category — e.g., Package Manager)
+- REQUIRED: (what must be used)
+- FORBIDDEN: (what must NOT be used)
+- Reason: (why)
+
+## Forbidden Patterns
+- (list things the AI should never suggest)
+
+## Common Mistakes
+| Wrong | Correct | Why |
+|-------|---------|-----|
+| `(wrong command)` | `(correct command)` | (reason) |
+"""
+
+
+def _init_project(target_dir: str = ".") -> None:
+    """Initialize aisanity in a project: create .ai-memory.md and .vscode/mcp.json."""
+    target = Path(target_dir).resolve()
+    project_name = target.name
+
+    # ── .ai-memory.md
+    memory_path = target / MEMORY_FILE
+    if memory_path.exists():
+        print(f"⏭  {MEMORY_FILE} already exists — skipping")
+    else:
+        memory_path.write_text(
+            MEMORY_TEMPLATE.format(project_name=project_name),
+            encoding="utf-8",
+        )
+        print(f"✅ Created {memory_path}")
+
+    # ── .vscode/mcp.json
+    vscode_dir = target / ".vscode"
+    mcp_path = vscode_dir / "mcp.json"
+
+    mcp_config = {
+        "servers": {
+            "aisanity": {
+                "type": "stdio",
+                "command": "python3",
+                "args": [str(AISANITY_DIR / "mcp_server.py")],
+                "env": {
+                    "GITHUB_TOKEN": "${env:GITHUB_TOKEN}"
+                }
+            }
+        }
+    }
+
+    if mcp_path.exists():
+        # Merge — don't overwrite existing MCP servers
+        try:
+            existing = json.loads(mcp_path.read_text(encoding="utf-8"))
+            servers = existing.get("servers", {})
+            if "aisanity" in servers:
+                print(f"⏭  aisanity already in {mcp_path} — skipping")
+            else:
+                servers["aisanity"] = mcp_config["servers"]["aisanity"]
+                existing["servers"] = servers
+                mcp_path.write_text(
+                    json.dumps(existing, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                print(f"✅ Added aisanity to {mcp_path}")
+        except (json.JSONDecodeError, KeyError):
+            print(f"⚠️  {mcp_path} exists but could not be parsed — skipping")
+    else:
+        vscode_dir.mkdir(parents=True, exist_ok=True)
+        mcp_path.write_text(
+            json.dumps(mcp_config, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(f"✅ Created {mcp_path}")
+
+    print(f"\n🎉 aisanity initialized in {target}")
+    print(f"   1. Edit {MEMORY_FILE} with your project's rules")
+    print(f"   2. Reload VS Code window (Ctrl+Shift+P → 'Reload Window')")
+    print(f"   3. Claude/Copilot will now auto-validate via MCP")
+
+
+def _install_global() -> None:
+    """Install aisanity MCP server into VS Code dedicated user MCP config."""
+    home = Path.home()
+    # VS Code uses a dedicated mcp.json (not settings.json) since late 2025
+    candidates = [
+        home / ".config" / "Code" / "User" / "mcp.json",
+        home / ".config" / "Code - Insiders" / "User" / "mcp.json",
+        home / "Library" / "Application Support" / "Code" / "User" / "mcp.json",
+        home / "AppData" / "Roaming" / "Code" / "User" / "mcp.json",
+    ]
+
+    mcp_path = None
+    for p in candidates:
+        if p.exists():
+            mcp_path = p
+            break
+        # Also check if the parent (User dir) exists — we can create mcp.json there
+        if p.parent.exists():
+            mcp_path = p
+            break
+
+    if not mcp_path:
+        print("⚠️  Could not find VS Code user config directory")
+        print("   Create this file manually at ~/.config/Code/User/mcp.json:\n")
+        _print_global_config()
+        return
+
+    mcp_server_entry = {
+        "type": "stdio",
+        "command": "python3",
+        "args": [str(AISANITY_DIR / "mcp_server.py")],
+        "env": {
+            "GITHUB_TOKEN": "${env:GITHUB_TOKEN}"
+        }
+    }
+
+    if mcp_path.exists():
+        try:
+            existing = json.loads(mcp_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            print(f"⚠️  {mcp_path} could not be parsed")
+            print(f"   Add this manually:\n")
+            _print_global_config()
+            return
+
+        servers = existing.get("servers", {})
+        if "aisanity" in servers:
+            print("⏭  aisanity already in global MCP config — skipping")
+            return
+
+        servers["aisanity"] = mcp_server_entry
+        existing["servers"] = servers
+        mcp_path.write_text(
+            json.dumps(existing, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    else:
+        mcp_config = {
+            "servers": {
+                "aisanity": mcp_server_entry
+            }
+        }
+        mcp_path.write_text(
+            json.dumps(mcp_config, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    print(f"✅ Added aisanity to {mcp_path}")
+    print(f"   Reload VS Code window (Ctrl+Shift+P → 'Reload Window')")
+    print(f"   aisanity MCP is now available in ALL projects")
+
+
+def _print_global_config() -> None:
+    """Print the global config snippet for manual installation."""
+    config = {
+        "servers": {
+            "aisanity": {
+                "type": "stdio",
+                "command": "python3",
+                "args": [str(AISANITY_DIR / "mcp_server.py")],
+                "env": {
+                    "GITHUB_TOKEN": "${env:GITHUB_TOKEN}"
+                }
+            }
+        }
+    }
+    print(json.dumps(config, indent=2))
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -440,6 +626,27 @@ def main() -> None:
         prog="aisanity",
         description="AI Memory Guardian — validate AI suggestions against project memory",
     )
+    subparsers = parser.add_subparsers(dest="command")
+
+    # ── init subcommand
+    init_parser = subparsers.add_parser(
+        "init",
+        help="Initialize aisanity in a project (creates .ai-memory.md + .vscode/mcp.json)",
+    )
+    init_parser.add_argument(
+        "target",
+        nargs="?",
+        default=".",
+        help="Project directory (default: current directory)",
+    )
+
+    # ── install-global subcommand
+    subparsers.add_parser(
+        "install-global",
+        help="Add aisanity MCP server to VS Code global user settings (all projects)",
+    )
+
+    # ── validate (default behavior)
     parser.add_argument(
         "suggestion",
         nargs="*",
@@ -488,6 +695,15 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+
+    # -- Subcommands
+    if args.command == "init":
+        _init_project(args.target)
+        return
+
+    if args.command == "install-global":
+        _install_global()
+        return
 
     github_token = os.environ.get("GITHUB_TOKEN")
 

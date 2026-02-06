@@ -179,9 +179,32 @@ Violations found → Claude self-corrects before showing you
 No violations   → you see the response as normal
 ```
 
-### Step 1: Add MCP config to your project
+### Step 1: Install the MCP server
 
-Create `.vscode/mcp.json` in your project root:
+**Option A: Global install (recommended — all projects get aisanity)**
+
+```bash
+cd ~/Github/aisanity
+python3 guardian.py install-global
+```
+
+This adds aisanity to VS Code's dedicated user MCP config
+(`~/.config/Code/User/mcp.json`). Every project automatically has access.
+
+**Option B: Per-project install**
+
+```bash
+cd ~/Github/my-project
+python3 ~/Github/aisanity/guardian.py init
+```
+
+This creates both `.ai-memory.md` (template) and `.vscode/mcp.json` in the
+project directory.
+
+**Manual setup** (if the commands above don't work for your setup):
+
+Create or edit `~/.config/Code/User/mcp.json` (global) or
+`.vscode/mcp.json` (per-project):
 
 ```json
 {
@@ -192,25 +215,6 @@ Create `.vscode/mcp.json` in your project root:
       "args": ["/home/user0/Github/aisanity/mcp_server.py"],
       "env": {
         "GITHUB_TOKEN": "${env:GITHUB_TOKEN}"
-      }
-    }
-  }
-}
-```
-
-Or add to your global VS Code `settings.json` (applies to all projects):
-
-```json
-{
-  "mcp": {
-    "servers": {
-      "aisanity": {
-        "type": "stdio",
-        "command": "python3",
-        "args": ["/home/user0/Github/aisanity/mcp_server.py"],
-        "env": {
-          "GITHUB_TOKEN": "${env:GITHUB_TOKEN}"
-        }
       }
     }
   }
@@ -244,6 +248,8 @@ In VS Code, go to **Settings → Copilot → Chat → Instructions** and add:
 | `aisanity_memory` | Read the project memory (so the AI can proactively follow rules) |
 
 ### Override MCP server defaults
+
+Edit the aisanity entry in `~/.config/Code/User/mcp.json` or `.vscode/mcp.json`:
 
 ```json
 {

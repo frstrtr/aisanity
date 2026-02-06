@@ -55,32 +55,33 @@ A lightweight guardian that:
 The MCP server lets your AI agent (Claude, Copilot) call aisanity
 **automatically** during conversations — no manual copy-paste needed.
 
-1. Create `.vscode/mcp.json` in your project:
+### Option A: Global install (all projects)
 
-```json
-{
-  "servers": {
-    "aisanity": {
-      "type": "stdio",
-      "command": "python3",
-      "args": ["/home/user0/Github/aisanity/mcp_server.py"],
-      "env": {
-        "GITHUB_TOKEN": "${env:GITHUB_TOKEN}"
-      }
-    }
-  }
-}
+```bash
+python3 guardian.py install-global
 ```
 
-2. Add to Claude's custom instructions:
+This adds aisanity to VS Code's dedicated user MCP config (`~/.config/Code/User/mcp.json`).
+Every project gets aisanity automatically — you only need a `.ai-memory.md` per project.
+
+### Option B: Per-project install
+
+```bash
+cd ~/Github/my-project
+python3 /path/to/aisanity/guardian.py init
+```
+
+This creates both `.ai-memory.md` (template) and `.vscode/mcp.json` in the project.
+
+### Custom instructions for the AI
+
+Add to Claude's custom instructions (Settings → Copilot → Chat → Instructions):
 
 > Before finalizing any response containing code or commands, call
 > `aisanity_validate` to check it against project memory. If violations
 > are found, use `aisanity_fix` and revise before presenting.
 
-3. The AI now self-validates and self-corrects automatically.
-
-See [install.md](install.md) for detailed MCP setup.
+See [install.md](install.md) for detailed setup.
 
 ## Setup (CLI fallback)
 
