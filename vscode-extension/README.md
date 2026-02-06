@@ -60,10 +60,26 @@ Instead of using the model picker, you can type `@aisanity` before any question:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
+| `aisanity.mainModel` | `ollama` | Main model for response generation (see below) |
 | `aisanity.ollamaUrl` | `http://192.168.86.45:11434` | Ollama server URL |
-| `aisanity.ollamaModel` | `devstral:24b` | Ollama model for generation + validation |
+| `aisanity.ollamaModel` | `devstral:24b` | Ollama model for validation (and generation when mainModel is "ollama") |
 | `aisanity.githubModel` | `openai/gpt-4o-mini` | GitHub Models fallback model |
 | `aisanity.memoryFile` | `.ai-memory.md` | Project memory filename |
+
+### Main Model
+
+The `aisanity.mainModel` setting controls which model generates responses when
+aisanity is selected in the model picker:
+
+| Value | Generation | Validation |
+|-------|-----------|------------|
+| `ollama` (default) | Ollama (`ollamaModel`) | Ollama (`ollamaModel`) |
+| `copilot:gpt-4o` | Copilot GPT-4o | Ollama (`ollamaModel`) |
+| `copilot:claude-sonnet-4` | Claude Sonnet 4 | Ollama (`ollamaModel`) |
+| Any `vendor:family` | That VS Code model | Ollama (`ollamaModel`) |
+
+This lets you use powerful cloud models (Copilot, etc.) for generation while
+aisanity enforces project rules via your local Ollama validator.
 
 ### Behavior
 
@@ -100,11 +116,12 @@ AI response → Validate → Violations found!
 When you add aisanity as a model provider:
 
 1. You configure it with your Ollama server URL and model name
-2. Select it as your active model in the chat picker
-3. Every chat request from ANY participant goes through aisanity:
-   - Your question is forwarded to Ollama (with project memory injected)
-   - The response is validated against `.ai-memory.md`
-   - If violations → auto-corrected (if enabled)
+2. (Optional) Set `aisanity.mainModel` to a VS Code model ID like `copilot:gpt-4o`
+3. Select aisanity as your active model in the chat picker
+4. Every chat request from ANY participant goes through aisanity:
+   - Your question is forwarded to the **main model** (with project memory injected)
+   - The response is validated against `.ai-memory.md` via **Ollama**
+   - If violations → auto-corrected by the same main model
    - Clean response streamed back with ✅ badge
 
 The model picker configuration takes priority over extension settings for

@@ -1,5 +1,22 @@
 # aisanity — VS Code Extension Changelog
 
+## 0.6.0 — Main Model Selector (Copilot + Validation)
+
+- **New `aisanity.mainModel` setting** — choose which model generates responses
+  when aisanity is selected in the model picker:
+  - `"ollama"` (default) — Ollama handles both generation and validation
+  - `"copilot:gpt-4o"` — Copilot GPT-4o generates, Ollama validates
+  - `"copilot:claude-sonnet-4"` — Claude generates, Ollama validates
+  - Any `vendor:family` VS Code model ID
+- **Separation of concerns** — use your favourite powerful model for generation
+  while aisanity ensures compliance with project memory via Ollama
+- **Graceful fallback** — if the configured main model isn't available, aisanity
+  falls back to Ollama with an explanatory error message
+- **Correction loop uses main model** — auto-corrections are sent back to the
+  same model that generated the original response, not just Ollama
+- Updated `aisanity.ollamaModel` description to clarify it controls the
+  validation model (and generation only when mainModel is "ollama")
+
 ## 0.5.0 — Settings, Model Picker Fix, Updated Docs
 
 - **Model picker now configurable** — added `configuration` schema to the

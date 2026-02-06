@@ -2,23 +2,21 @@
  * aisanity Language Model Provider — appears in the VS Code model dropdown
  *
  * When the user selects "aisanity" as their model in the chat model picker,
- * EVERY request from ANY participant (Copilot, workspace, etc.) gets proxied:
+ * EVERY request from ANY participant gets proxied through validation:
  *
  *   1. Injects project memory into the system context
- *   2. Forwards to the configured Ollama model for generation
- *   3. Validates the full response against .ai-memory.md
+ *   2. Forwards to the "main model" for generation:
+ *      - ollama (default) → direct Ollama HTTP call
+ *      - copilot:gpt-4o, copilot:claude-sonnet-4, etc. → VS Code model API
+ *   3. Validates the full response against .ai-memory.md (always via Ollama)
  *   4. If violations → auto-corrects and re-validates (configurable)
  *   5. Streams the validated (or corrected) response back
  *
- * Configuration:
- *   - aisanity.enableValidation — turn validation on/off
- *   - aisanity.enableAutoCorrection — turn disagreement flow on/off
- *   - aisanity.maxCorrectionRetries — how many times to retry corrections
- *   - aisanity.showValidationBadges — show ✅/⚠️ badges
- *   - aisanity.ollamaUrl / ollamaModel — Ollama server config
- *
- * The model also picks up per-group configuration from the VS Code
- * Manage Models UI (ollamaUrl, ollamaModel fields).
+ * Key setting: aisanity.mainModel
+ *   - "ollama" (default) → Ollama does both generation + validation
+ *   - "copilot:gpt-4o"  → Copilot GPT-4o generates, Ollama validates
+ *   - "copilot:claude-sonnet-4" → Claude generates, Ollama validates
+ *   - Any VS Code model ID → that model generates, Ollama validates
  */
 
 import * as vscode from "vscode";
@@ -45,7 +43,7 @@ function findMemoryFile(): string | undefined {
     return undefined;
 }
 
-// ── Ollama streaming helper ─────────────────────────────────────────────────
+// ── Ollama helper ───────────────────────────────────────────────────────────
 
 interface OllamaMessage {
     role: "system" | "user" | "assistant";
@@ -54,7 +52,6 @@ interface OllamaMessage {
 
 /**
  * Call Ollama /api/chat and collect the full response (non-streaming).
- * We need the full text to validate before streaming to VS Code.
  */
 function ollamaChat(
     baseUrl: string,
@@ -128,13 +125,12 @@ function ollamaChat(
 
 // ── Convert VS Code messages to Ollama format ───────────────────────────────
 
-function convertMessages(
+function convertToOllamaMessages(
     messages: readonly vscode.LanguageModelChatRequestMessage[],
     memoryText: string | undefined,
 ): OllamaMessage[] {
     const result: OllamaMessage[] = [];
 
-    // Inject memory as opening system-level context
     if (memoryText) {
         result.push({
             role: "system",
@@ -151,7 +147,6 @@ function convertMessages(
         const role: OllamaMessage["role"] =
             msg.role === vscode.LanguageModelChatMessageRole.User ? "user" : "assistant";
 
-        // Extract text content from message parts
         let text = "";
         for (const part of msg.content) {
             if (part instanceof vscode.LanguageModelTextPart) {
@@ -166,6 +161,46 @@ function convertMessages(
     return result;
 }
 
+// ── Convert VS Code request messages → LanguageModelChatMessage for VS Code model API ──
+
+function convertToVscodeMessages(
+    messages: readonly vscode.LanguageModelChatRequestMessage[],
+    memoryText: string | undefined,
+): vscode.LanguageModelChatMessage[] {
+    const result: vscode.LanguageModelChatMessage[] = [];
+
+    // Inject memory as the first user message (system preamble)
+    if (memoryText) {
+        result.push(
+            vscode.LanguageModelChatMessage.User(
+                "You are a helpful coding assistant. The following project memory " +
+                "defines rules you MUST follow. Read it carefully and comply with " +
+                "every requirement.\n\n---\n" +
+                memoryText +
+                "\n---\n\nFollow the above rules strictly in all responses.",
+            ),
+        );
+    }
+
+    for (const msg of messages) {
+        let text = "";
+        for (const part of msg.content) {
+            if (part instanceof vscode.LanguageModelTextPart) {
+                text += part.value;
+            }
+        }
+        if (!text) continue;
+
+        if (msg.role === vscode.LanguageModelChatMessageRole.User) {
+            result.push(vscode.LanguageModelChatMessage.User(text));
+        } else {
+            result.push(vscode.LanguageModelChatMessage.Assistant(text));
+        }
+    }
+
+    return result;
+}
+
 // ── Resolve effective Ollama config ─────────────────────────────────────────
 
 interface OllamaConfig {
@@ -173,12 +208,6 @@ interface OllamaConfig {
     model: string;
 }
 
-/**
- * Resolve the Ollama URL and model from (in priority order):
- * 1. Per-group configuration from Manage Models UI
- * 2. Extension settings (aisanity.ollamaUrl / aisanity.ollamaModel)
- * 3. Defaults
- */
 function resolveOllamaConfig(
     groupConfig?: { readonly [key: string]: any },
 ): OllamaConfig {
@@ -191,6 +220,87 @@ function resolveOllamaConfig(
             groupConfig?.ollamaModel ||
             extConfig.get<string>("ollamaModel", DEFAULTS.ollamaModel),
     };
+}
+
+// ── Parse mainModel selector ────────────────────────────────────────────────
+
+interface MainModelSelector {
+    kind: "ollama" | "vscode-model";
+    /** For vscode-model: the raw model ID string (e.g. "copilot:gpt-4o") */
+    id?: string;
+    /** Parsed vendor (e.g. "copilot") */
+    vendor?: string;
+    /** Parsed family (e.g. "gpt-4o") */
+    family?: string;
+}
+
+function parseMainModel(setting: string): MainModelSelector {
+    if (!setting || setting === "ollama") {
+        return { kind: "ollama" };
+    }
+
+    // Format: "vendor:family" (e.g. "copilot:gpt-4o") or just a model ID
+    const parts = setting.split(":");
+    if (parts.length >= 2) {
+        return {
+            kind: "vscode-model",
+            id: setting,
+            vendor: parts[0],
+            family: parts.slice(1).join(":"),
+        };
+    }
+
+    // Treat as a raw model ID
+    return { kind: "vscode-model", id: setting };
+}
+
+/**
+ * Resolve a VS Code LanguageModelChat from a MainModelSelector.
+ * Returns null if no matching model is found.
+ */
+async function resolveVscodeModel(
+    selector: MainModelSelector,
+): Promise<vscode.LanguageModelChat | null> {
+    const chatSelector: vscode.LanguageModelChatSelector = {};
+
+    if (selector.vendor) chatSelector.vendor = selector.vendor;
+    if (selector.family) chatSelector.family = selector.family;
+    if (selector.id && !selector.vendor) chatSelector.id = selector.id;
+
+    const models = await vscode.lm.selectChatModels(chatSelector);
+
+    if (models.length === 0) {
+        // Fallback: try matching by ID across all models
+        if (selector.id) {
+            const all = await vscode.lm.selectChatModels();
+            const match = all.find(
+                (m) =>
+                    m.id === selector.id ||
+                    m.id.includes(selector.id!) ||
+                    `${m.vendor}:${m.family}` === selector.id,
+            );
+            return match ?? null;
+        }
+        return null;
+    }
+
+    return models[0];
+}
+
+/**
+ * Send a request to a VS Code LanguageModelChat and collect the full response.
+ */
+async function sendToVscodeModel(
+    model: vscode.LanguageModelChat,
+    messages: vscode.LanguageModelChatMessage[],
+    token: vscode.CancellationToken,
+): Promise<string> {
+    const response = await model.sendRequest(messages, {}, token);
+    let full = "";
+    for await (const chunk of response.text) {
+        full += chunk;
+    }
+    return full;
 }
 
 // ── Model Provider ──────────────────────────────────────────────────────────
@@ -208,19 +318,31 @@ export class AisanityModelProvider
         options: vscode.PrepareLanguageModelChatModelOptions,
         _token: vscode.CancellationToken,
     ): Promise<vscode.LanguageModelChatInformation[]> {
-        // Store configuration from Manage Models UI for later use
         this._groupConfig = (options as any).configuration;
 
+        const config = getConfig();
+        const mainModelSetting = config.get<string>("mainModel", "ollama");
         const { model: ollamaModel } = resolveOllamaConfig(this._groupConfig);
+
+        // Build descriptive name based on main model
+        let modelName: string;
+        let modelDetail: string;
+        if (mainModelSetting === "ollama") {
+            modelName = `aisanity (${ollamaModel})`;
+            modelDetail = `Ollama ${ollamaModel} → validate → auto-correct`;
+        } else {
+            modelName = `aisanity (${mainModelSetting} + validation)`;
+            modelDetail = `${mainModelSetting} generates → Ollama ${ollamaModel} validates → auto-correct`;
+        }
 
         return [
             {
                 id: "aisanity-guardian",
-                name: `aisanity (${ollamaModel})`,
+                name: modelName,
                 family: "aisanity",
-                version: "0.5.0",
-                tooltip: "Proxies through Ollama with automatic project memory validation",
-                detail: `Ollama ${ollamaModel} → validate against .ai-memory.md → auto-correct`,
+                version: "0.5.1",
+                tooltip: "Proxies through a main model with automatic project memory validation via Ollama",
+                detail: modelDetail,
                 maxInputTokens: 32_000,
                 maxOutputTokens: 8_000,
                 capabilities: {
@@ -241,6 +363,7 @@ export class AisanityModelProvider
         const config = getConfig();
         const { url: ollamaUrl, model: ollamaModel } = resolveOllamaConfig(this._groupConfig);
 
+        const mainModelSetting = config.get<string>("mainModel", "ollama");
         const enableValidation = config.get<boolean>("enableValidation", true);
         const enableAutoCorrection = config.get<boolean>("enableAutoCorrection", true);
         const maxRetries = config.get<number>("maxCorrectionRetries", 1);
@@ -249,22 +372,51 @@ export class AisanityModelProvider
         const memoryPath = findMemoryFile();
         const memoryText = memoryPath ? fs.readFileSync(memoryPath, "utf-8") : undefined;
 
-        // ── Step 1: Convert and forward to Ollama
-        const ollamaMessages = convertMessages(messages, memoryText);
+        const mainModel = parseMainModel(mainModelSetting);
+
+        // ── Step 1: Generate response via the main model ────────────────
+
         let response: string;
+        let resolvedMainModel: vscode.LanguageModelChat | null = null;
+
+        if (mainModel.kind === "vscode-model") {
+            // Use a VS Code model (e.g. Copilot GPT-4o) for generation
+            resolvedMainModel = await resolveVscodeModel(mainModel);
+            if (!resolvedMainModel) {
+                progress.report(new vscode.LanguageModelTextPart(
+                    `❌ Main model "${mainModelSetting}" not found.\n\n` +
+                    `Available models can be found via the model picker. ` +
+                    `Use the format \`vendor:family\` (e.g. \`copilot:gpt-4o\`, \`copilot:claude-sonnet-4\`), ` +
+                    `or set to \`ollama\` to use Ollama directly.\n\n` +
+                    `Falling back to Ollama (${ollamaModel})…\n\n---\n\n`,
+                ));
+                // Fall back to Ollama
+                resolvedMainModel = null;
+            }
+        }
 
         try {
-            response = await ollamaChat(ollamaUrl, ollamaModel, ollamaMessages, token);
+            if (resolvedMainModel) {
+                // Generate via VS Code model API
+                const vscodeMessages = convertToVscodeMessages(messages, memoryText);
+                response = await sendToVscodeModel(resolvedMainModel, vscodeMessages, token);
+            } else {
+                // Generate via Ollama
+                const ollamaMessages = convertToOllamaMessages(messages, memoryText);
+                response = await ollamaChat(ollamaUrl, ollamaModel, ollamaMessages, token);
+            }
         } catch (err: any) {
+            const source = resolvedMainModel ? mainModelSetting : `Ollama ${ollamaModel}`;
             progress.report(new vscode.LanguageModelTextPart(
-                `❌ Ollama request failed: ${err.message ?? err}`,
+                `❌ ${source} request failed: ${err.message ?? err}`,
             ));
             return;
         }
 
         if (token.isCancellationRequested) return;
 
-        // ── Step 2: If validation disabled or no memory, stream directly
+        // ── Step 2: If validation disabled or no memory, stream directly ─
+
         if (!enableValidation || !memoryPath || !memoryText) {
             progress.report(new vscode.LanguageModelTextPart(response));
             if (showBadges) {
@@ -281,7 +433,8 @@ export class AisanityModelProvider
             return;
         }
 
-        // ── Step 3: Validate against project memory
+        // ── Step 3: Validate against project memory (always Ollama) ─────
+
         const guardian = new MemoryGuardian({
             memoryFile: memoryPath,
             ollamaUrl,
@@ -294,7 +447,6 @@ export class AisanityModelProvider
         try {
             verdict = await guardian.validate(response);
         } catch {
-            // Validation infra failed — return original with warning
             progress.report(new vscode.LanguageModelTextPart(response));
             if (showBadges) {
                 progress.report(new vscode.LanguageModelTextPart(
@@ -306,18 +458,21 @@ export class AisanityModelProvider
 
         if (token.isCancellationRequested) return;
 
-        // ── Step 4a: Clean — stream original
+        // ── Step 4a: Clean — stream original ────────────────────────────
+
         if (verdict.is_valid) {
             progress.report(new vscode.LanguageModelTextPart(response));
             if (showBadges) {
+                const src = resolvedMainModel ? mainModelSetting : `Ollama ${ollamaModel}`;
                 progress.report(new vscode.LanguageModelTextPart(
-                    "\n\n---\n✅ *Validated by aisanity — complies with project memory*\n",
+                    `\n\n---\n✅ *Validated by aisanity — generated by ${src}, complies with project memory*\n`,
                 ));
             }
             return;
         }
 
-        // ── Step 4b: Violations — report them
+        // ── Step 4b: Violations — report them ───────────────────────────
+
         if (showBadges) {
             progress.report(new vscode.LanguageModelTextPart(
                 "---\n⚠️ **aisanity intercepted violations**" +
@@ -334,7 +489,6 @@ export class AisanityModelProvider
             ));
         }
 
-        // If auto-correction is disabled, just show the original response
         if (!enableAutoCorrection || maxRetries === 0) {
             progress.report(new vscode.LanguageModelTextPart(response));
             if (showBadges) {
@@ -345,10 +499,12 @@ export class AisanityModelProvider
             return;
         }
 
-        // ── Step 5: Auto-correct loop (up to maxRetries)
+        // ── Step 5: Auto-correct loop ───────────────────────────────────
+        // Correction goes back to the SAME main model that generated the
+        // original response — so it can fix its own mistakes.
+
         let currentResponse = response;
         let currentVerdict = verdict;
-        let correctionHistory = [...ollamaMessages];
 
         for (let attempt = 0; attempt < maxRetries; attempt++) {
             if (token.isCancellationRequested) return;
@@ -360,23 +516,35 @@ export class AisanityModelProvider
                 )
                 .join("\n");
 
-            const correctionMessages: OllamaMessage[] = [
-                ...correctionHistory,
-                { role: "assistant", content: currentResponse },
-                {
-                    role: "user",
-                    content:
-                        `Your previous response has these violations of the project rules:\n\n` +
-                        `${violationsSummary}\n\n` +
-                        `Provide a CORRECTED response that fixes ALL violations. ` +
-                        `Follow every rule in the project memory strictly. ` +
-                        `Do not apologize or explain what changed — just give the corrected response.`,
-                },
-            ];
+            const correctionPrompt =
+                `Your previous response has these violations of the project rules:\n\n` +
+                `${violationsSummary}\n\n` +
+                `Provide a CORRECTED response that fixes ALL violations. ` +
+                `Follow every rule in the project memory strictly. ` +
+                `Do not apologize or explain what changed — just give the corrected response.`;
 
             let corrected: string;
             try {
-                corrected = await ollamaChat(ollamaUrl, ollamaModel, correctionMessages, token);
+                if (resolvedMainModel) {
+                    // Correct via the same VS Code model
+                    const correctionMessages = convertToVscodeMessages(messages, memoryText);
+                    correctionMessages.push(
+                        vscode.LanguageModelChatMessage.Assistant(currentResponse),
+                    );
+                    correctionMessages.push(
+                        vscode.LanguageModelChatMessage.User(correctionPrompt),
+                    );
+                    corrected = await sendToVscodeModel(resolvedMainModel, correctionMessages, token);
+                } else {
+                    // Correct via Ollama
+                    const ollamaMessages = convertToOllamaMessages(messages, memoryText);
+                    const correctionMessages: OllamaMessage[] = [
+                        ...ollamaMessages,
+                        { role: "assistant", content: currentResponse },
+                        { role: "user", content: correctionPrompt },
+                    ];
+                    corrected = await ollamaChat(ollamaUrl, ollamaModel, correctionMessages, token);
+                }
             } catch (err: any) {
                 progress.report(new vscode.LanguageModelTextPart(
                     `❌ Correction attempt ${attempt + 1} failed: ${err.message}\n\n**Original response:**\n\n`,
@@ -391,7 +559,6 @@ export class AisanityModelProvider
             try {
                 const recheck = await guardian.validate(corrected);
                 if (recheck.is_valid) {
-                    // Success!
                     progress.report(new vscode.LanguageModelTextPart(corrected));
                     if (showBadges) {
                         progress.report(new vscode.LanguageModelTextPart(
@@ -401,12 +568,9 @@ export class AisanityModelProvider
                     return;
                 }
 
-                // Still has violations — try again or give up
                 currentResponse = corrected;
                 currentVerdict = recheck;
-                correctionHistory = correctionMessages;
             } catch {
-                // Re-validation failed — return the correction anyway
                 progress.report(new vscode.LanguageModelTextPart(corrected));
                 if (showBadges) {
                     progress.report(new vscode.LanguageModelTextPart(
@@ -417,7 +581,7 @@ export class AisanityModelProvider
             }
         }
 
-        // Exhausted retries — return last corrected version with remaining issues
+        // Exhausted retries
         progress.report(new vscode.LanguageModelTextPart(currentResponse));
         if (showBadges) {
             const remaining = currentVerdict.violations
@@ -434,7 +598,6 @@ export class AisanityModelProvider
         text: string | vscode.LanguageModelChatRequestMessage,
         _token: vscode.CancellationToken,
     ): Promise<number> {
-        // Rough estimate: ~4 chars per token (good enough for context window management)
         const str =
             typeof text === "string"
                 ? text
