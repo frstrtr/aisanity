@@ -15,6 +15,7 @@ import json
 import sys
 import os
 import argparse
+import urllib.error
 from dataclasses import asdict
 from pathlib import Path
 
@@ -239,7 +240,8 @@ def handle_message(msg: dict, guardian: MemoryGuardian) -> None:
         try:
             result = handler(guardian, tool_args)
             _respond(request_id, result)
-        except Exception as exc:
+        except (urllib.error.URLError, OSError, json.JSONDecodeError,
+                RuntimeError, ValueError, KeyError) as exc:
             _log(f"Tool error: {exc}")
             _respond(request_id, _tool_result(f"Error: {exc}", is_error=True))
         return

@@ -308,7 +308,8 @@ class MemoryGuardian:
                 _log(f"🔍 Validating via {backend.name} ({backend.model})…")
                 raw = backend.chat(system, user)
                 return self._parse_verdict(raw, backend.name, backend.model)
-            except Exception as exc:
+            except (urllib.error.URLError, OSError, json.JSONDecodeError,
+                    RuntimeError, ValueError, KeyError) as exc:
                 last_error = f"{backend.name}: {exc}"
                 _log(f"⚠️  {backend.name} failed: {exc}")
                 continue
@@ -331,7 +332,8 @@ class MemoryGuardian:
                     return self._ollama_freeform(backend, system, user)
                 else:
                     return backend.chat(system, user)
-            except Exception as exc:
+            except (urllib.error.URLError, OSError, json.JSONDecodeError,
+                    RuntimeError, ValueError, KeyError) as exc:
                 last_error = f"{backend.name}: {exc}"
                 _log(f"⚠️  {backend.name} failed: {exc}")
                 continue
@@ -524,8 +526,8 @@ def _init_project(target_dir: str = ".") -> None:
 
     print(f"\n🎉 aisanity initialized in {target}")
     print(f"   1. Edit {MEMORY_FILE} with your project's rules")
-    print(f"   2. Reload VS Code window (Ctrl+Shift+P → 'Reload Window')")
-    print(f"   3. Claude/Copilot will now auto-validate via MCP")
+    print("   2. Reload VS Code window (Ctrl+Shift+P → 'Reload Window')")
+    print("   3. Claude/Copilot will now auto-validate via MCP")
 
 
 def _install_global() -> None:
@@ -569,7 +571,7 @@ def _install_global() -> None:
             existing = json.loads(mcp_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             print(f"⚠️  {mcp_path} could not be parsed")
-            print(f"   Add this manually:\n")
+            print("   Add this manually:\n")
             _print_global_config()
             return
 
@@ -596,8 +598,8 @@ def _install_global() -> None:
         )
 
     print(f"✅ Added aisanity to {mcp_path}")
-    print(f"   Reload VS Code window (Ctrl+Shift+P → 'Reload Window')")
-    print(f"   aisanity MCP is now available in ALL projects")
+    print("   Reload VS Code window (Ctrl+Shift+P → 'Reload Window')")
+    print("   aisanity MCP is now available in ALL projects")
 
 
 def _print_global_config() -> None:
