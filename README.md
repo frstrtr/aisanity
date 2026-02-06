@@ -50,12 +50,30 @@ A lightweight guardian that:
            └─────────────┘             └───────────────┘
 ```
 
-## MCP Server — Automatic AI Validation (Recommended)
+## Installation
+
+### Option 1: VS Code Extension (easiest)
+
+Install the `.vsix` from the `vscode-extension/` directory:
+
+```bash
+code --install-extension vscode-extension/aisanity-0.1.0.vsix
+```
+
+This gives you:
+- **Auto-registered MCP server** — AI agents see aisanity tools immediately
+- **Command Palette** — `aisanity: Init Project`, `Show Memory`, `Validate Selection`
+- **Status bar indicator** — shows whether the project has a memory file
+- **Settings UI** — configure Ollama URL, model, and fallback from VS Code settings
+
+Then run **aisanity: Init Project** from the Command Palette to create your `.ai-memory.md`.
+
+### Option 2: MCP Server (manual)
 
 The MCP server lets your AI agent (Claude, Copilot) call aisanity
 **automatically** during conversations — no manual copy-paste needed.
 
-### Option A: Global install (all projects)
+#### Global install (all projects)
 
 ```bash
 python3 guardian.py install-global
@@ -64,7 +82,7 @@ python3 guardian.py install-global
 This adds aisanity to VS Code's dedicated user MCP config (`~/.config/Code/User/mcp.json`).
 Every project gets aisanity automatically — you only need a `.ai-memory.md` per project.
 
-### Option B: Per-project install
+#### Per-project install
 
 ```bash
 cd ~/Github/my-project

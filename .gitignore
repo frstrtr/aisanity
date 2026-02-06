@@ -13,3 +13,9 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+# VS Code Extension
+vscode-extension/node_modules/
+vscode-extension/dist/
+vscode-extension/out/
+vscode-extension/python/
+vscode-extension/*.vsix

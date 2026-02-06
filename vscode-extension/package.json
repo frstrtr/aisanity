@@ -1,0 +1,95 @@
+{
+  "name": "aisanity",
+  "displayName": "aisanity — AI Memory Guardian",
+  "description": "Catches AI context drift and hallucination by validating suggestions against a plain-text project memory file (.ai-memory.md)",
+  "version": "0.1.0",
+  "publisher": "frstrtr",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/frstrtr/aisanity"
+  },
+  "engines": {
+    "vscode": "^1.99.0"
+  },
+  "categories": [
+    "AI",
+    "Linters",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "memory",
+    "guardian",
+    "hallucination",
+    "context-drift",
+    "mcp",
+    "ollama",
+    "copilot"
+  ],
+  "icon": "icon.png",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "aisanity.mcp-server",
+        "label": "aisanity — AI Memory Guardian"
+      }
+    ],
+    "commands": [
+      {
+        "command": "aisanity.init",
+        "title": "aisanity: Init Project (create .ai-memory.md)"
+      },
+      {
+        "command": "aisanity.showMemory",
+        "title": "aisanity: Show Project Memory"
+      },
+      {
+        "command": "aisanity.validate",
+        "title": "aisanity: Validate Selection"
+      }
+    ],
+    "configuration": {
+      "title": "aisanity",
+      "properties": {
+        "aisanity.ollamaUrl": {
+          "type": "string",
+          "default": "http://192.168.86.45:11434",
+          "description": "URL of the Ollama server on the LAN"
+        },
+        "aisanity.ollamaModel": {
+          "type": "string",
+          "default": "devstral:24b",
+          "description": "Ollama model to use for validation"
+        },
+        "aisanity.githubModel": {
+          "type": "string",
+          "default": "openai/gpt-4o-mini",
+          "description": "GitHub Models fallback model"
+        },
+        "aisanity.memoryFile": {
+          "type": "string",
+          "default": ".ai-memory.md",
+          "description": "Name of the project memory file"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile -- --production",
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "npx @vscode/vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.99.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0",
+    "@vscode/vsce": "^3.0.0"
+  }
+}

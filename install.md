@@ -8,7 +8,31 @@
 
 ---
 
-## Step 1: Clone the repository
+## Quick Install: VS Code Extension
+
+The simplest way to install aisanity is as a VS Code extension:
+
+```bash
+cd ~/Github/aisanity
+code --install-extension vscode-extension/aisanity-0.1.0.vsix
+```
+
+This gives you:
+- **Auto-registered MCP server** — no manual `mcp.json` editing
+- **Command Palette** commands for init, validate, and showing memory
+- **Status bar indicator** for memory file presence
+- **Settings UI** for Ollama URL, model, and fallback configuration
+
+After installing, open any project and run **aisanity: Init Project** from the
+Command Palette (Ctrl+Shift+P) to create your `.ai-memory.md`.
+
+**That's it!** The rest of this guide covers manual/CLI installation.
+
+---
+
+## Manual Install
+
+### Step 1: Clone the repository
 
 ```bash
 cd ~/Github
