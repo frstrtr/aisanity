@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
+import { MemoryGuardian, formatVerdict, formatCorrection } from "./guardian";
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -38,7 +39,7 @@ function getConfig(): vscode.WorkspaceConfiguration {
 }
 
 function getMcpServerPath(): string {
-    return path.join(__dirname, "..", "python", "mcp_server.py");
+    return path.join(__dirname, "mcpServer.js");
 }
 
 function getMemoryFileName(): string {
@@ -102,7 +103,7 @@ class AisanityMcpProvider
 
         const server = new vscode.McpStdioServerDefinition(
             "aisanity",
-            "python3",
+            "node",
             args,
             env,
             "0.1.0"
@@ -204,20 +205,50 @@ async function validateSelection(): Promise<void> {
         return;
     }
 
-    // Use the terminal to run validation
+    const memoryPath = findMemoryFile();
+    if (!memoryPath) {
+        vscode.window.showWarningMessage(
+            "aisanity: No .ai-memory.md found — run 'aisanity: Init Project' first"
+        );
+        return;
+    }
+
     const config = getConfig();
-    const guardianPath = path.join(__dirname, "..", "python", "guardian.py");
-    const ollamaUrl = config.get<string>("ollamaUrl", "http://192.168.86.45:11434");
-    const ollamaModel = config.get<string>("ollamaModel", "devstral:24b");
+    const guardian = new MemoryGuardian({
+        memoryFile: memoryPath,
+        ollamaUrl: config.get<string>("ollamaUrl"),
+        ollamaModel: config.get<string>("ollamaModel"),
+        githubModel: config.get<string>("githubModel"),
+        githubToken: process.env.GITHUB_TOKEN,
+    });
 
-    const terminal = vscode.window.createTerminal("aisanity");
-    terminal.show();
+    await vscode.window.withProgress(
+        {
+            location: vscode.ProgressLocation.Notification,
+            title: "aisanity: Validating…",
+            cancellable: false,
+        },
+        async () => {
+            const verdict = await guardian.validate(text);
+            const report = formatVerdict(verdict);
 
-    // Escape the text for shell
-    const escaped = text.replace(/'/g, "'\\''");
-    terminal.sendText(
-        `echo '${escaped}' | python3 "${guardianPath}" --check ` +
-        `--ollama-url "${ollamaUrl}" --ollama-model "${ollamaModel}" --fix`
+            if (verdict.is_valid) {
+                vscode.window.showInformationMessage(
+                    "✅ aisanity: Suggestion complies with project memory"
+                );
+            } else {
+                const correction = await guardian.generateCorrection(text, verdict);
+                const fullReport = correction
+                    ? report + formatCorrection(correction)
+                    : report;
+
+                // Show in output channel
+                const channel = vscode.window.createOutputChannel("aisanity");
+                channel.clear();
+                channel.appendLine(fullReport);
+                channel.show();
+            }
+        }
     );
 }
 

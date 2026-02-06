@@ -11,13 +11,13 @@ against a plain-text project memory file (`.ai-memory.md`).
 - **Command Palette** — `aisanity: Init Project`, `aisanity: Show Memory`,
   `aisanity: Validate Selection`.
 - **Status bar indicator** — shows whether the project has a memory file.
-- **Zero external dependencies** — uses only Python stdlib + local Ollama server.
+- **Zero external dependencies** — pure TypeScript, Node.js built-ins only.
 
 ## Requirements
 
-- **Python 3.7+** on PATH
 - **Ollama** server running on LAN (default: `http://192.168.86.45:11434`)
 - Recommended model: `devstral:24b`
+- No Python required — the extension is 100% TypeScript/Node.js
 
 ## Settings
 

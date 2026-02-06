@@ -2,7 +2,7 @@
   "name": "aisanity",
   "displayName": "aisanity — AI Memory Guardian",
   "description": "Catches AI context drift and hallucination by validating suggestions against a plain-text project memory file (.ai-memory.md)",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "frstrtr",
   "license": "MIT",
   "repository": {
