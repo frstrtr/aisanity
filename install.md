@@ -12,8 +12,7 @@
 
 ```bash
 cd ~/Github
-git clone https://github.com/YOUR_USER/aisanity.git
-# or if you already have it:
+git clone https://github.com/frstrtr/aisanity.git
 cd ~/Github/aisanity
 ```
 
@@ -159,7 +158,112 @@ documented in .ai-memory.md.
 
 ---
 
-## Override defaults
+## MCP Server — Automatic AI Validation in VS Code
+
+This is the **recommended way** to use aisanity. Instead of running the CLI
+manually, the MCP server lets your AI agent (Claude, Copilot, etc.) call
+aisanity **automatically** during conversations.
+
+### How it works
+
+```
+You ask Claude a question in VS Code
+        ↓
+Claude generates a response
+        ↓
+Claude calls aisanity_validate automatically (MCP tool)
+        ↓
+aisanity checks response against .ai-memory.md via Ollama
+        ↓
+Violations found → Claude self-corrects before showing you
+No violations   → you see the response as normal
+```
+
+### Step 1: Add MCP config to your project
+
+Create `.vscode/mcp.json` in your project root:
+
+```json
+{
+  "servers": {
+    "aisanity": {
+      "type": "stdio",
+      "command": "python3",
+      "args": ["/home/user0/Github/aisanity/mcp_server.py"],
+      "env": {
+        "GITHUB_TOKEN": "${env:GITHUB_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+Or add to your global VS Code `settings.json` (applies to all projects):
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "aisanity": {
+        "type": "stdio",
+        "command": "python3",
+        "args": ["/home/user0/Github/aisanity/mcp_server.py"],
+        "env": {
+          "GITHUB_TOKEN": "${env:GITHUB_TOKEN}"
+        }
+      }
+    }
+  }
+}
+```
+
+### Step 2: Set Claude's custom instructions
+
+In VS Code, go to **Settings → Copilot → Chat → Instructions** and add:
+
+> Before finalizing any response that contains code, shell commands, or
+> architecture advice, call the `aisanity_validate` tool to check it against
+> the project memory. If violations are found, use `aisanity_fix` to get
+> correction instructions and revise your response before presenting it.
+> At the start of a new conversation, call `aisanity_memory` to load
+> the project's requirements.
+
+### Step 3: Verify it works
+
+1. Open a project that has a `.ai-memory.md` file
+2. Open VS Code Chat (Ctrl+Shift+I)
+3. Ask Claude to do something that would violate a rule
+4. Watch the tool calls in the chat — you should see `aisanity_validate` being invoked
+
+### MCP Tools Exposed
+
+| Tool | Purpose |
+|------|--------|
+| `aisanity_validate` | Check a suggestion against `.ai-memory.md` — returns pass/fail + violations |
+| `aisanity_fix` | Validate + return correction instructions if violations found |
+| `aisanity_memory` | Read the project memory (so the AI can proactively follow rules) |
+
+### Override MCP server defaults
+
+```json
+{
+  "servers": {
+    "aisanity": {
+      "type": "stdio",
+      "command": "python3",
+      "args": [
+        "/home/user0/Github/aisanity/mcp_server.py",
+        "--ollama-model", "qwen2.5:32b",
+        "--ollama-url", "http://10.0.0.5:11434"
+      ]
+    }
+  }
+}
+```
+
+---
+
+## CLI Override defaults
 
 ```bash
 # Use a different Ollama model

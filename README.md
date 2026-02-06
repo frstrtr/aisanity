@@ -50,7 +50,39 @@ A lightweight guardian that:
            └─────────────┘             └───────────────┘
 ```
 
-## Setup
+## MCP Server — Automatic AI Validation (Recommended)
+
+The MCP server lets your AI agent (Claude, Copilot) call aisanity
+**automatically** during conversations — no manual copy-paste needed.
+
+1. Create `.vscode/mcp.json` in your project:
+
+```json
+{
+  "servers": {
+    "aisanity": {
+      "type": "stdio",
+      "command": "python3",
+      "args": ["/home/user0/Github/aisanity/mcp_server.py"],
+      "env": {
+        "GITHUB_TOKEN": "${env:GITHUB_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+2. Add to Claude's custom instructions:
+
+> Before finalizing any response containing code or commands, call
+> `aisanity_validate` to check it against project memory. If violations
+> are found, use `aisanity_fix` and revise before presenting.
+
+3. The AI now self-validates and self-corrects automatically.
+
+See [install.md](install.md) for detailed MCP setup.
+
+## Setup (CLI fallback)
 
 ### 1. Ollama Server (primary — required)
 
