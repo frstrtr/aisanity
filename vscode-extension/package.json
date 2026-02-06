@@ -2,7 +2,7 @@
   "name": "aisanity",
   "displayName": "aisanity — AI Memory Guardian",
   "description": "Catches AI context drift and hallucination by validating suggestions against a plain-text project memory file (.ai-memory.md)",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "frstrtr",
   "license": "MIT",
   "repository": {
@@ -33,6 +33,15 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "chatParticipants": [
+      {
+        "id": "aisanity.guardian",
+        "name": "aisanity",
+        "fullName": "aisanity — AI Memory Guardian",
+        "description": "Ask me anything — I'll validate the AI's response against your project memory before showing it",
+        "isSticky": true
+      }
+    ],
     "mcpServerDefinitionProviders": [
       {
         "id": "aisanity.mcp-server",

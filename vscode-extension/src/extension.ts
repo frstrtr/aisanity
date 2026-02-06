@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
 import { MemoryGuardian, formatVerdict, formatCorrection } from "./guardian";
+import { chatHandler } from "./chatParticipant";
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -289,6 +290,14 @@ export function activate(context: vscode.ExtensionContext): void {
             mcpProvider
         )
     );
+
+    // Register @aisanity chat participant
+    const participant = vscode.chat.createChatParticipant(
+        "aisanity.guardian",
+        chatHandler
+    );
+    participant.iconPath = vscode.Uri.joinPath(context.extensionUri, "icon.png");
+    context.subscriptions.push(participant);
 
     // Register commands
     context.subscriptions.push(
