@@ -108,6 +108,7 @@ export const chatHandler: vscode.ChatRequestHandler = async (
     const enableAutoCorrection = config.get<boolean>("enableAutoCorrection", true);
     const maxRetries = config.get<number>("maxCorrectionRetries", 1);
     const showBadges = config.get<boolean>("showValidationBadges", true);
+    const verbosity = config.get<string>("verbosity", "verbose") as "minimal" | "normal" | "verbose" | "debug";
     const memoryPath = findMemoryFile();
 
     // ── No memory file or validation disabled → pass through
@@ -189,20 +190,39 @@ export const chatHandler: vscode.ChatRequestHandler = async (
     if (verdict.is_valid) {
         stream.markdown(modelResponse);
         if (showBadges) {
-            stream.markdown(
-                "\n\n---\n✅ *Validated by aisanity — complies with project memory*\n",
-            );
+            if (verbosity === "debug") {
+                stream.markdown(
+                    `\n\n---\n✅ *Validated by aisanity — complies with project memory*\n` +
+                    `*\\[validator: ${verdict.backend} / ${verdict.model}\\]*\n`,
+                );
+            } else {
+                stream.markdown(
+                    "\n\n---\n✅ *Validated by aisanity — complies with project memory*\n",
+                );
+            }
         }
         return { metadata: { validated: true, violations: 0 } };
     }
 
     // ── Step 4b: Violations found
+
+    // In verbose/debug modes, show the original response first
+    if (verbosity === "verbose" || verbosity === "debug") {
+        stream.markdown(
+            "## 📝 Original Response\n\n" +
+            "<details>\n<summary>Click to expand original (pre-validation) response</summary>\n\n" +
+            modelResponse +
+            "\n\n</details>\n\n",
+        );
+    }
+
     if (!enableAutoCorrection || maxRetries === 0) {
-        // Just report violations and show original
-        if (showBadges) {
+        if (showBadges && verbosity !== "minimal") {
             stream.markdown(formatViolationsMarkdown(verdict));
         }
-        stream.markdown(modelResponse);
+        if (verbosity === "minimal" || verbosity === "normal") {
+            stream.markdown(modelResponse);
+        }
         if (showBadges) {
             stream.markdown(
                 "\n\n---\n⚠️ *Auto-correction disabled — review violations above manually*\n",
@@ -215,8 +235,8 @@ export const chatHandler: vscode.ChatRequestHandler = async (
         `Found ${verdict.violations.length} violation(s) — requesting correction…`,
     );
 
-    // Show what was caught
-    if (showBadges) {
+    // Show violations banner (all modes except minimal)
+    if (showBadges && verbosity !== "minimal") {
         stream.markdown(formatViolationsMarkdown(verdict));
     }
 
@@ -242,36 +262,57 @@ export const chatHandler: vscode.ChatRequestHandler = async (
         ),
     ];
 
+    if (verbosity === "debug") {
+        stream.markdown(`\n*🔧 Requesting correction (attempt 1/${maxRetries})…*\n\n`);
+    }
+
     // ── Step 5: Stream the corrected response
     try {
+        const t0 = Date.now();
         const correctedResp = await request.model.sendRequest(
             correctionMessages,
             {},
             token,
         );
 
-        // Collect to re-validate
+        // Collect full corrected text
         let correctedText = "";
         for await (const chunk of correctedResp.text) {
             correctedText += chunk;
-            stream.markdown(chunk);
         }
+        const correctionElapsed = Date.now() - t0;
 
-        // ── Step 6: Re-validate the correction (non-blocking, just informational)
+        // In verbose/debug modes, label the corrected response
+        if (verbosity === "verbose" || verbosity === "debug") {
+            stream.markdown("## ✅ Corrected Response\n\n");
+        }
+        stream.markdown(correctedText);
+
+        // ── Step 6: Re-validate the correction
         try {
+            const t1 = Date.now();
             const recheck = await guardian.validate(correctedText);
+            const recheckElapsed = Date.now() - t1;
+
             if (recheck.is_valid) {
-                stream.markdown(
-                    "\n\n---\n✅ *Corrected and validated by aisanity — now complies with project memory*\n",
-                );
+                let badge = "\n\n---\n✅ *Corrected and validated by aisanity — now complies with project memory*";
+                if (verbosity === "debug") {
+                    badge += ` (correction ${correctionElapsed}ms, re-validation ${recheckElapsed}ms)`;
+                    badge += ` \\[validator: ${recheck.backend} / ${recheck.model}\\]`;
+                }
+                badge += "\n";
+                stream.markdown(badge);
             } else {
                 const remaining = recheck.violations
                     .map((v) => `\`${v.rule}\`: ${v.explanation}`)
                     .join(", ");
-                stream.markdown(
-                    `\n\n---\n⚠️ *aisanity: ${recheck.violations.length} issue(s) may remain after correction: ${remaining}. ` +
-                    `Review manually or ask again.*\n`,
-                );
+                let badge = `\n\n---\n⚠️ *aisanity: ${recheck.violations.length} issue(s) may remain after correction: ${remaining}. Review manually or ask again.*`;
+                if (verbosity === "debug") {
+                    badge += ` (correction ${correctionElapsed}ms, re-validation ${recheckElapsed}ms)`;
+                    badge += ` \\[validator: ${recheck.backend} / ${recheck.model}\\]`;
+                }
+                badge += "\n";
+                stream.markdown(badge);
             }
         } catch {
             stream.markdown(
@@ -289,8 +330,10 @@ export const chatHandler: vscode.ChatRequestHandler = async (
     } catch (err: any) {
         // Correction failed — show original with violations listed
         stream.markdown(`\n\n❌ *Correction request failed: ${err.message ?? err}*\n`);
-        stream.markdown("\n**Original (unvalidated) response:**\n\n");
-        stream.markdown(modelResponse);
+        if (verbosity === "minimal" || verbosity === "normal") {
+            stream.markdown("\n**Original (unvalidated) response:**\n\n");
+            stream.markdown(modelResponse);
+        }
         return {
             metadata: {
                 validated: true,

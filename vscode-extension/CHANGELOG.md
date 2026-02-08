@@ -1,5 +1,21 @@
 # aisanity — VS Code Extension Changelog
 
+## 0.6.4 — Verbosity Levels
+
+- **New `aisanity.verbosity` setting** with four levels:
+  - `minimal` — final response only + small ✅/⚠️ badge
+  - `normal` — violations banner + final (corrected) response + badge
+  - `verbose` **(new default)** — shows original response in a collapsible
+    block, violations, then corrected response separately so you can compare
+    both before using either
+  - `debug` — everything: original, violations with validator model/timing,
+    correction attempt numbers, re-validation verdict with latency
+- **Original response always visible** in verbose/debug — no more guessing
+  what was changed during auto-correction
+- **Timing data in debug mode** — correction and re-validation latency in ms
+- **Validator identity in debug mode** — shows backend name and model used
+- Applied to both model picker path and `@aisanity` chat participant
+
 ## 0.6.3 — Inline Health Check in Model Picker
 
 - **Inline health check** — typing "Health Check" or "status" in chat while

@@ -2,7 +2,7 @@
   "name": "aisanity",
   "displayName": "aisanity — AI Memory Guardian",
   "description": "Catches AI context drift and hallucination by validating suggestions against a plain-text project memory file (.ai-memory.md)",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "publisher": "frstrtr",
   "license": "MIT",
   "repository": {
@@ -129,6 +129,18 @@
           "type": "boolean",
           "default": true,
           "description": "Show ✅/⚠️ validation status badges in chat responses"
+        },
+        "aisanity.verbosity": {
+          "type": "string",
+          "default": "verbose",
+          "enum": ["minimal", "normal", "verbose", "debug"],
+          "enumDescriptions": [
+            "Final response only + small ✅/⚠️ badge",
+            "Violations banner + final (corrected) response + badge",
+            "Original response + violations + corrected response shown separately (default — review before using)",
+            "Everything: original, violations with validator model/timing, corrected, re-validation verdict"
+          ],
+          "description": "Controls how much detail aisanity shows during validation and correction. 'verbose' (default) shows both original and corrected responses so you can compare."
         },
         "aisanity.validationBackend": {
           "type": "string",
