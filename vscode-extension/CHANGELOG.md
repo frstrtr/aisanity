@@ -1,5 +1,26 @@
 # aisanity — VS Code Extension Changelog
 
+## 0.6.2 — Health Check, MCP Fix, Updated Docs
+
+- **Health Check command** — run `aisanity: Health Check` from the Command
+  Palette to verify all components are configured and responding:
+  - Memory file: found/missing, path, size
+  - Main model: resolution, test ping with response time
+  - Ollama checker: connectivity, version, model availability, test ping
+  - Settings summary table
+  - Overall verdict (all ok / issues detected)
+- **MCP server memory file fix** — MCP server now receives the **absolute path**
+  to `.ai-memory.md` instead of a relative filename; the previous `cwd` hack
+  was ineffective since `McpStdioServerDefinition` has no `cwd` property
+- **Default main model** — changed from `ollama` to `copilot:claude-opus-4.6`
+  (Claude Opus 4.6 generates, Ollama devstral:24b validates)
+- **Dynamic token limits** — queries the underlying model for its real context
+  window size (Ollama `/api/show` for context_length, VS Code model API for
+  maxInputTokens)
+- **Updated docs** — comprehensive README, install.md, extension README with
+  usage examples, health check documentation, main model configuration
+  examples, and updated architecture diagrams
+
 ## 0.6.0 — Main Model Selector (Copilot + Validation)
 
 - **New `aisanity.mainModel` setting** — choose which model generates responses

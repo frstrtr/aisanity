@@ -437,7 +437,7 @@ export class AisanityModelProvider
                 id: "aisanity-guardian",
                 name: modelName,
                 family: "aisanity",
-                version: "0.6.1",
+                version: "0.6.2",
                 tooltip: "Proxies through a main model with automatic project memory validation via Ollama",
                 detail: modelDetail,
                 maxInputTokens: maxInput,

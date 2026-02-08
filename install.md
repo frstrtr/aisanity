@@ -13,12 +13,23 @@
 
 ```bash
 cd ~/Github/aisanity
-code --install-extension vscode-extension/aisanity-0.5.0.vsix
+code --install-extension vscode-extension/aisanity-0.6.2.vsix
 ```
 
-After installing:
+After installing, verify your setup:
 
-### Option A: Use as a model (simplest — all requests validated)
+```
+Ctrl+Shift+P → aisanity: Health Check
+```
+
+This checks memory file, Ollama connectivity, model availability, and sends
+test requests to both models.
+
+---
+
+## Setup: Model Picker (recommended)
+
+### Option A: Cloud model generates, Ollama validates (default)
 
 1. Open the Chat view (Ctrl+Shift+I)
 2. Click the **model picker dropdown** at the top of the chat
@@ -29,9 +40,25 @@ After installing:
 7. Enter your Ollama model: `devstral:24b`
 8. Click OK — the model now appears in your model picker
 9. **Select it** as your active model
-10. Start chatting — every response is generated via Ollama and validated!
+10. Start chatting — Claude Opus 4.6 generates, Ollama validates!
 
-### Option B: Use as a chat participant (per-conversation)
+The default `aisanity.mainModel` is `copilot:claude-opus-4.6`. Change it in
+settings to use a different model:
+
+```json
+// Use GPT-5.1 for generation instead
+{ "aisanity.mainModel": "copilot:gpt-5.1" }
+```
+
+### Option B: Ollama handles everything (no cloud)
+
+```json
+{ "aisanity.mainModel": "ollama" }
+```
+
+Then configure via Model Picker as above. Ollama does both generation and validation.
+
+### Option C: Use as a chat participant (per-conversation)
 
 Type `@aisanity` before your question in chat:
 
@@ -42,7 +69,7 @@ Type `@aisanity` before your question in chat:
 This routes the question through Copilot's model but validates the response
 against your project memory before showing it.
 
-### Option C: MCP tools (voluntary, model-initiated)
+### Option D: MCP tools (voluntary, model-initiated)
 
 The MCP server is auto-registered. Add these custom instructions
 (Settings → Copilot → Chat → Instructions):
@@ -57,16 +84,34 @@ The MCP server is auto-registered. Add these custom instructions
 
 Open VS Code Settings (Ctrl+,) and search for `aisanity`:
 
-### Connection Settings
+### Main Model (generation)
 
 | Setting | Default | What it does |
 |---------|---------|-------------|
-| `aisanity.ollamaUrl` | `http://192.168.86.45:11434` | Your Ollama server address |
-| `aisanity.ollamaModel` | `devstral:24b` | Which Ollama model to use |
-| `aisanity.githubModel` | `openai/gpt-4o-mini` | Fallback model when Ollama is down |
+| `aisanity.mainModel` | `copilot:claude-opus-4.6` | Which model generates responses |
+
+**Examples:**
+```json
+// Use Copilot Claude Opus 4.6 (default)
+{ "aisanity.mainModel": "copilot:claude-opus-4.6" }
+
+// Use GPT-5.1
+{ "aisanity.mainModel": "copilot:gpt-5.1" }
+
+// Use Ollama directly (no cloud model)
+{ "aisanity.mainModel": "ollama" }
+```
+
+### Checker Model (validation)
+
+| Setting | Default | What it does |
+|---------|---------|-------------|
+| `aisanity.ollamaUrl` | `http://192.168.86.45:11434` | Ollama server address |
+| `aisanity.ollamaModel` | `devstral:24b` | Ollama checker model |
+| `aisanity.githubModel` | `openai/gpt-4o-mini` | Fallback when Ollama is down |
 | `aisanity.memoryFile` | `.ai-memory.md` | Memory file name |
 
-### Behavior Settings
+### Behavior
 
 | Setting | Default | What it does |
 |---------|---------|-------------|
@@ -74,35 +119,33 @@ Open VS Code Settings (Ctrl+,) and search for `aisanity`:
 | `aisanity.enableAutoCorrection` | `true` | Auto-fix violations (disagreement flow) |
 | `aisanity.maxCorrectionRetries` | `1` | How many fix attempts (0 = report only, max 3) |
 | `aisanity.showValidationBadges` | `true` | Show ✅/⚠️ in responses |
-| `aisanity.validationBackend` | `ollama` | `ollama`, `github`, or `auto` (try Ollama first) |
+| `aisanity.validationBackend` | `ollama` | `ollama`, `github`, or `auto` |
 
-### Example: Report-only mode (no auto-correction)
+### Configuration Examples
 
+**Report-only mode** (no auto-correction):
 ```json
-{
-    "aisanity.enableAutoCorrection": false
-}
+{ "aisanity.enableAutoCorrection": false }
 ```
-
 Violations are reported but the original response is shown unchanged.
 
-### Example: Maximum strictness
-
+**Maximum strictness** (3 correction attempts):
 ```json
 {
     "aisanity.maxCorrectionRetries": 3,
     "aisanity.enableAutoCorrection": true
 }
 ```
-
 Up to 3 correction attempts until the response passes validation.
 
-### Example: Disable validation entirely (pure Ollama proxy)
-
+**Disable validation entirely** (pure proxy):
 ```json
-{
-    "aisanity.enableValidation": false
-}
+{ "aisanity.enableValidation": false }
+```
+
+**Use a different checker model:**
+```json
+{ "aisanity.ollamaModel": "qwen2.5:32b" }
 ```
 
 ---
@@ -150,6 +193,32 @@ The LLM reads it as-is and checks every AI response against it.
 
 ---
 
+## Health Check
+
+Run **aisanity: Health Check** from the Command Palette to verify your setup.
+It tests:
+
+- ✅/❌ Memory file — found, path, size
+- ✅/❌ Main model — resolution from VS Code model API
+- 🧪 Main model test request — sends a ping, measures response time
+- ✅/❌ Ollama server — connectivity, version
+- ✅/❌ Ollama checker model — availability via `/api/show`
+- 🧪 Ollama test request — sends a ping, measures response time
+- Settings summary table
+- Overall verdict
+
+**Example output:**
+```
+✅ Memory file: /home/user/project/.ai-memory.md (8.4 KB)
+✅ Main model: Claude Opus 4.6 (copilot/claude-opus-4.6)
+🧪 Test: ✅ responded in 1.2s
+✅ Ollama: reachable (v0.9.0), devstral:24b available
+🧪 Test: ✅ responded in 0.8s
+✅ All systems operational
+```
+
+---
+
 ## Ollama Server Setup
 
 ### Check connectivity
@@ -158,7 +227,7 @@ The LLM reads it as-is and checks every AI response against it.
 curl -s http://192.168.86.45:11434/api/version
 ```
 
-### Pull the recommended model
+### Pull the recommended checker model
 
 ```bash
 ollama pull devstral:24b
@@ -168,7 +237,7 @@ ollama pull devstral:24b
 
 | Model | Size | Best for |
 |-------|------|----------|
-| `devstral:24b` | 14.3 GB | **Default** — code-focused, fast |
+| `devstral:24b` | 14.3 GB | **Default checker** — code-focused, fast |
 | `gemma3:27b` | 17.4 GB | General reasoning |
 | `qwen2.5:32b` | 19.9 GB | Strong multilingual |
 | `qwq:latest` | 19.9 GB | Deep thinking |
@@ -223,7 +292,7 @@ echo "import requests" | aisanity --check --fix
 # JSON output
 aisanity --json "pip install flask"
 
-# Override model
+# Override checker model
 aisanity --ollama-model qwen2.5:32b "pip install flask"
 ```
 
@@ -262,6 +331,17 @@ Create `~/.config/Code/User/mcp.json`:
   }
 }
 ```
+
+---
+
+## Commands Reference
+
+| Command | Description |
+|---------|-------------|
+| `aisanity: Init Project` | Create `.ai-memory.md` template in workspace |
+| `aisanity: Show Memory` | Open the project memory file |
+| `aisanity: Validate Selection` | Validate selected text against project memory |
+| `aisanity: Health Check` | Test all components — memory, models, connectivity |
 
 ---
 
