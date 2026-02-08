@@ -2,7 +2,7 @@
   "name": "aisanity",
   "displayName": "aisanity — AI Memory Guardian",
   "description": "Catches AI context drift and hallucination by validating suggestions against a plain-text project memory file (.ai-memory.md)",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "publisher": "frstrtr",
   "license": "MIT",
   "repository": {
@@ -141,6 +141,11 @@
             "Everything: original, violations with validator model/timing, corrected, re-validation verdict"
           ],
           "description": "Controls how much detail aisanity shows during validation and correction. 'verbose' (default) shows both original and corrected responses so you can compare."
+        },
+        "aisanity.confirmCorrections": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ask for confirmation before applying auto-corrections. When enabled (default), aisanity shows violations and asks whether to auto-correct, then shows the corrected response and asks whether to accept it, use the original, or re-correct."
         },
         "aisanity.validationBackend": {
           "type": "string",

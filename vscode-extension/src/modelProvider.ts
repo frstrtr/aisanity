@@ -437,7 +437,7 @@ export class AisanityModelProvider
                 id: "aisanity-guardian",
                 name: modelName,
                 family: "aisanity",
-                version: "0.6.4",
+                version: "0.6.5",
                 tooltip: "Proxies through a main model with automatic project memory validation via Ollama",
                 detail: modelDetail,
                 maxInputTokens: maxInput,
@@ -473,6 +473,7 @@ export class AisanityModelProvider
         const maxRetries = config.get<number>("maxCorrectionRetries", 1);
         const showBadges = config.get<boolean>("showValidationBadges", true);
         const verbosity = config.get<string>("verbosity", "verbose") as "minimal" | "normal" | "verbose" | "debug";
+        const confirmCorrections = config.get<boolean>("confirmCorrections", true);
 
         const memoryPath = findMemoryFile();
         const memoryText = memoryPath ? fs.readFileSync(memoryPath, "utf-8") : undefined;
@@ -591,9 +592,8 @@ export class AisanityModelProvider
         if (verbosity === "verbose" || verbosity === "debug") {
             progress.report(new vscode.LanguageModelTextPart(
                 "## 📝 Original Response\n\n" +
-                "<details>\n<summary>Click to expand original (pre-validation) response</summary>\n\n" +
                 response +
-                "\n\n</details>\n\n",
+                "\n\n",
             ));
         }
 
@@ -604,18 +604,40 @@ export class AisanityModelProvider
 
         if (!enableAutoCorrection || maxRetries === 0) {
             // No correction — show original as the final response
-            if (verbosity === "minimal") {
-                progress.report(new vscode.LanguageModelTextPart(response));
-            } else if (verbosity === "normal") {
+            if (verbosity === "minimal" || verbosity === "normal") {
                 progress.report(new vscode.LanguageModelTextPart(response));
             }
-            // verbose/debug already showed it above in the details block
             if (showBadges) {
                 progress.report(new vscode.LanguageModelTextPart(
                     "\n\n---\n⚠️ *Auto-correction disabled — review violations above manually*\n",
                 ));
             }
             return;
+        }
+
+        // ── Confirmation gate: ask user before auto-correcting ──────────
+
+        if (confirmCorrections) {
+            const preAction = await vscode.window.showWarningMessage(
+                `aisanity: ${verdict.violations.length} violation(s) found. Auto-correct?`,
+                { modal: false },
+                "Auto-Correct",
+                "Use Original",
+            );
+
+            if (!preAction || preAction === "Use Original") {
+                // User chose original or dismissed
+                if (verbosity === "minimal" || verbosity === "normal") {
+                    progress.report(new vscode.LanguageModelTextPart(response));
+                }
+                if (showBadges) {
+                    progress.report(new vscode.LanguageModelTextPart(
+                        "\n\n---\n⚠️ *User chose original response — violations not corrected*\n",
+                    ));
+                }
+                return;
+            }
+            // User chose "Auto-Correct" → continue below
         }
 
         // ── Step 5: Auto-correct loop ───────────────────────────────────
@@ -671,7 +693,6 @@ export class AisanityModelProvider
                 progress.report(new vscode.LanguageModelTextPart(
                     `❌ Correction attempt ${attempt + 1} failed: ${err.message}\n\n`,
                 ));
-                // Fall back to showing whichever response we have
                 if (verbosity === "minimal" || verbosity === "normal") {
                     progress.report(new vscode.LanguageModelTextPart(
                         "**Original response (unvalidated):**\n\n" + currentResponse,
@@ -685,78 +706,121 @@ export class AisanityModelProvider
 
             // Re-validate the correction
             const t1 = Date.now();
+            let recheck: Verdict | null = null;
             try {
-                const recheck = await guardian.validate(corrected);
-                const recheckElapsed = Date.now() - t1;
+                recheck = await guardian.validate(corrected);
+            } catch {
+                // Re-validation failed — treat as unverified
+            }
+            const recheckElapsed = Date.now() - t1;
 
-                if (recheck.is_valid) {
-                    // ── Correction succeeded ────────────────────────────
-                    if (verbosity === "verbose" || verbosity === "debug") {
-                        progress.report(new vscode.LanguageModelTextPart(
-                            "## ✅ Corrected Response\n\n",
-                        ));
-                    }
-                    progress.report(new vscode.LanguageModelTextPart(corrected));
-                    if (showBadges) {
-                        let badge = `\n\n---\n✅ *Corrected and validated by aisanity (attempt ${attempt + 1})`;
-                        if (verbosity === "debug") {
-                            badge += ` — correction ${correctionElapsed}ms, re-validation ${recheckElapsed}ms`;
-                            badge += ` \\[validator: ${recheck.backend} / ${recheck.model}\\]`;
+            // ── Show corrected response ─────────────────────────────────
+            if (verbosity === "verbose" || verbosity === "debug") {
+                progress.report(new vscode.LanguageModelTextPart(
+                    `## ${recheck?.is_valid ? "✅" : "⚠️"} Corrected Response (attempt ${attempt + 1})\n\n`,
+                ));
+            }
+            progress.report(new vscode.LanguageModelTextPart(corrected));
+
+            // Debug: show re-validation details
+            if (verbosity === "debug") {
+                if (recheck) {
+                    progress.report(new vscode.LanguageModelTextPart(
+                        `\n\n*Re-validation: ${recheck.is_valid ? "✅ passed" : `⚠️ ${recheck.violations.length} issue(s)`}` +
+                        ` — correction ${correctionElapsed}ms, re-validation ${recheckElapsed}ms` +
+                        ` \\[${recheck.backend} / ${recheck.model}\\]*\n`,
+                    ));
+                    if (!recheck.is_valid) {
+                        for (const v of recheck.violations) {
+                            progress.report(new vscode.LanguageModelTextPart(
+                                `- **${v.rule}**: \`${v.found}\` → \`${v.expected}\`\n`,
+                            ));
                         }
-                        badge += " — now complies with project memory*\n";
-                        progress.report(new vscode.LanguageModelTextPart(badge));
+                    }
+                } else {
+                    progress.report(new vscode.LanguageModelTextPart(
+                        `\n\n*Re-validation skipped (error) — correction ${correctionElapsed}ms*\n`,
+                    ));
+                }
+            }
+
+            // ── Confirmation gate: ask user to accept corrected ─────────
+
+            if (confirmCorrections) {
+                const recheckInfo = recheck
+                    ? (recheck.is_valid
+                        ? "Re-validation: ✅ passed"
+                        : `Re-validation: ⚠️ ${recheck.violations.length} issue(s) remain`)
+                    : "Re-validation: skipped";
+
+                const postAction = await vscode.window.showInformationMessage(
+                    `aisanity: Correction complete. ${recheckInfo}`,
+                    { modal: false },
+                    "Accept Corrected",
+                    "Use Original",
+                    ...(attempt + 1 < maxRetries ? ["Re-Correct"] : []),
+                );
+
+                if (postAction === "Use Original") {
+                    // Clear corrected, show original
+                    progress.report(new vscode.LanguageModelTextPart(
+                        "\n\n---\n\n## 📝 Using Original Response\n\n",
+                    ));
+                    if (verbosity === "minimal" || verbosity === "normal") {
+                        progress.report(new vscode.LanguageModelTextPart(response));
+                    }
+                    if (showBadges) {
+                        progress.report(new vscode.LanguageModelTextPart(
+                            "\n\n---\n⚠️ *User chose original response — violations not corrected*\n",
+                        ));
                     }
                     return;
                 }
 
-                // Still has issues — show debug info and loop
-                if (verbosity === "debug") {
-                    progress.report(new vscode.LanguageModelTextPart(
-                        `\n*⚠️ Re-validation found ${recheck.violations.length} remaining issue(s) ` +
-                        `(${recheckElapsed}ms, ${recheck.backend}/${recheck.model}):*\n`,
-                    ));
-                    for (const v of recheck.violations) {
-                        progress.report(new vscode.LanguageModelTextPart(
-                            `- **${v.rule}**: \`${v.found}\` → \`${v.expected}\`\n`,
-                        ));
+                if (postAction === "Re-Correct" && attempt + 1 < maxRetries) {
+                    // Loop again — update currentResponse/Verdict for next pass
+                    currentResponse = corrected;
+                    if (recheck && !recheck.is_valid) {
+                        currentVerdict = recheck;
                     }
-                    progress.report(new vscode.LanguageModelTextPart("\n"));
+                    continue;
                 }
 
-                currentResponse = corrected;
-                currentVerdict = recheck;
-            } catch {
-                // Re-validation failed — show corrected response anyway
-                if (verbosity === "verbose" || verbosity === "debug") {
-                    progress.report(new vscode.LanguageModelTextPart(
-                        "## ⚡ Corrected Response (re-validation skipped)\n\n",
-                    ));
+                // "Accept Corrected" or dialog dismissed → accept and finish
+            }
+
+            // ── Accepted (or no confirmation needed) ────────────────────
+
+            if (showBadges) {
+                let badge: string;
+                if (recheck?.is_valid) {
+                    badge = `\n\n---\n✅ *Corrected and validated by aisanity (attempt ${attempt + 1})`;
+                } else if (recheck) {
+                    const remaining = recheck.violations
+                        .map((v) => `\`${v.rule}\`: ${v.explanation}`)
+                        .join(", ");
+                    badge = `\n\n---\n⚠️ *aisanity: ${recheck.violations.length} issue(s) may remain: ${remaining}`;
+                } else {
+                    badge = `\n\n---\n⚡ *Corrected by aisanity (re-validation skipped)`;
                 }
-                progress.report(new vscode.LanguageModelTextPart(corrected));
-                if (showBadges) {
-                    progress.report(new vscode.LanguageModelTextPart(
-                        "\n\n---\n⚡ *Corrected by aisanity (re-validation skipped)*\n",
-                    ));
+                if (verbosity === "debug") {
+                    badge += ` — correction ${correctionElapsed}ms, re-validation ${recheckElapsed}ms`;
+                    if (recheck) badge += ` \\[${recheck.backend} / ${recheck.model}\\]`;
                 }
+                badge += "*\n";
+                progress.report(new vscode.LanguageModelTextPart(badge));
+            }
+
+            // If re-validation passed or no more retries, we're done
+            if (!confirmCorrections || recheck?.is_valid || attempt + 1 >= maxRetries) {
                 return;
             }
-        }
 
-        // ── Exhausted retries — show last corrected response ────────────
-
-        if (verbosity === "verbose" || verbosity === "debug") {
-            progress.report(new vscode.LanguageModelTextPart(
-                "## ⚠️ Corrected Response (issues may remain)\n\n",
-            ));
-        }
-        progress.report(new vscode.LanguageModelTextPart(currentResponse));
-        if (showBadges) {
-            const remaining = currentVerdict.violations
-                .map((v) => `\`${v.rule}\`: ${v.explanation}`)
-                .join(", ");
-            progress.report(new vscode.LanguageModelTextPart(
-                `\n\n---\n⚠️ *aisanity: ${currentVerdict.violations.length} issue(s) may remain after ${maxRetries} correction(s): ${remaining}. Review manually.*\n`,
-            ));
+            // Update for next iteration
+            currentResponse = corrected;
+            if (recheck && !recheck.is_valid) {
+                currentVerdict = recheck;
+            }
         }
     }
 
@@ -990,6 +1054,7 @@ export class AisanityModelProvider
         emit(`| maxCorrectionRetries | ${config.get("maxCorrectionRetries", 1)} |\n`);
         emit(`| showValidationBadges | ${config.get("showValidationBadges", true)} |\n`);
         emit(`| verbosity | ${config.get("verbosity", "verbose")} |\n`);
+        emit(`| confirmCorrections | ${config.get("confirmCorrections", true)} |\n`);
         emit(`| validationBackend | ${config.get("validationBackend", "ollama")} |\n\n`);
 
         // ── 5. Overall verdict ──────────────────────────────────────────

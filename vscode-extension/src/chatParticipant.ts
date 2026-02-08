@@ -109,6 +109,7 @@ export const chatHandler: vscode.ChatRequestHandler = async (
     const maxRetries = config.get<number>("maxCorrectionRetries", 1);
     const showBadges = config.get<boolean>("showValidationBadges", true);
     const verbosity = config.get<string>("verbosity", "verbose") as "minimal" | "normal" | "verbose" | "debug";
+    const confirmCorrections = config.get<boolean>("confirmCorrections", true);
     const memoryPath = findMemoryFile();
 
     // ── No memory file or validation disabled → pass through
@@ -210,9 +211,8 @@ export const chatHandler: vscode.ChatRequestHandler = async (
     if (verbosity === "verbose" || verbosity === "debug") {
         stream.markdown(
             "## 📝 Original Response\n\n" +
-            "<details>\n<summary>Click to expand original (pre-validation) response</summary>\n\n" +
             modelResponse +
-            "\n\n</details>\n\n",
+            "\n\n",
         );
     }
 
@@ -238,6 +238,29 @@ export const chatHandler: vscode.ChatRequestHandler = async (
     // Show violations banner (all modes except minimal)
     if (showBadges && verbosity !== "minimal") {
         stream.markdown(formatViolationsMarkdown(verdict));
+    }
+
+    // ── Confirmation gate: ask user before auto-correcting ──────────
+
+    if (confirmCorrections) {
+        const preAction = await vscode.window.showWarningMessage(
+            `aisanity: ${verdict.violations.length} violation(s) found. Auto-correct?`,
+            { modal: false },
+            "Auto-Correct",
+            "Use Original",
+        );
+
+        if (!preAction || preAction === "Use Original") {
+            if (verbosity === "minimal" || verbosity === "normal") {
+                stream.markdown(modelResponse);
+            }
+            if (showBadges) {
+                stream.markdown(
+                    "\n\n---\n⚠️ *User chose original response — violations not corrected*\n",
+                );
+            }
+            return { metadata: { validated: true, violations: verdict.violations.length, corrected: false } };
+        }
     }
 
     // Build correction request
@@ -266,7 +289,7 @@ export const chatHandler: vscode.ChatRequestHandler = async (
         stream.markdown(`\n*🔧 Requesting correction (attempt 1/${maxRetries})…*\n\n`);
     }
 
-    // ── Step 5: Stream the corrected response
+    // ── Step 5: Generate the corrected response
     try {
         const t0 = Date.now();
         const correctedResp = await request.model.sendRequest(
@@ -275,49 +298,97 @@ export const chatHandler: vscode.ChatRequestHandler = async (
             token,
         );
 
-        // Collect full corrected text
         let correctedText = "";
         for await (const chunk of correctedResp.text) {
             correctedText += chunk;
         }
         const correctionElapsed = Date.now() - t0;
 
-        // In verbose/debug modes, label the corrected response
+        // ── Step 6: Re-validate the correction
+        let recheck: Verdict | null = null;
+        let recheckElapsed = 0;
+        try {
+            const t1 = Date.now();
+            recheck = await guardian.validate(correctedText);
+            recheckElapsed = Date.now() - t1;
+        } catch {
+            // re-validation failed — treat as unverified
+        }
+
+        // Show corrected response
         if (verbosity === "verbose" || verbosity === "debug") {
-            stream.markdown("## ✅ Corrected Response\n\n");
+            stream.markdown(
+                `## ${recheck?.is_valid ? "✅" : "⚠️"} Corrected Response\n\n`,
+            );
         }
         stream.markdown(correctedText);
 
-        // ── Step 6: Re-validate the correction
-        try {
-            const t1 = Date.now();
-            const recheck = await guardian.validate(correctedText);
-            const recheckElapsed = Date.now() - t1;
-
-            if (recheck.is_valid) {
-                let badge = "\n\n---\n✅ *Corrected and validated by aisanity — now complies with project memory*";
-                if (verbosity === "debug") {
-                    badge += ` (correction ${correctionElapsed}ms, re-validation ${recheckElapsed}ms)`;
-                    badge += ` \\[validator: ${recheck.backend} / ${recheck.model}\\]`;
-                }
-                badge += "\n";
-                stream.markdown(badge);
+        // Debug details
+        if (verbosity === "debug") {
+            if (recheck) {
+                stream.markdown(
+                    `\n\n*Re-validation: ${recheck.is_valid ? "✅ passed" : `⚠️ ${recheck.violations.length} issue(s)`}` +
+                    ` — correction ${correctionElapsed}ms, re-validation ${recheckElapsed}ms` +
+                    ` \\[${recheck.backend} / ${recheck.model}\\]*\n`,
+                );
             } else {
+                stream.markdown(
+                    `\n\n*Re-validation skipped (error) — correction ${correctionElapsed}ms*\n`,
+                );
+            }
+        }
+
+        // ── Confirmation gate: ask user to accept corrected ─────────
+
+        if (confirmCorrections) {
+            const recheckInfo = recheck
+                ? (recheck.is_valid
+                    ? "Re-validation: ✅ passed"
+                    : `Re-validation: ⚠️ ${recheck.violations.length} issue(s) remain`)
+                : "Re-validation: skipped";
+
+            const postAction = await vscode.window.showInformationMessage(
+                `aisanity: Correction complete. ${recheckInfo}`,
+                { modal: false },
+                "Accept Corrected",
+                "Use Original",
+            );
+
+            if (postAction === "Use Original") {
+                stream.markdown(
+                    "\n\n---\n\n## 📝 Using Original Response\n\n",
+                );
+                if (verbosity === "minimal" || verbosity === "normal") {
+                    stream.markdown(modelResponse);
+                }
+                if (showBadges) {
+                    stream.markdown(
+                        "\n\n---\n⚠️ *User chose original response — violations not corrected*\n",
+                    );
+                }
+                return { metadata: { validated: true, violations: verdict.violations.length, corrected: false } };
+            }
+        }
+
+        // Accepted
+        if (showBadges) {
+            let badge: string;
+            if (recheck?.is_valid) {
+                badge = "\n\n---\n✅ *Corrected and validated by aisanity — now complies with project memory*";
+            } else if (recheck) {
                 const remaining = recheck.violations
                     .map((v) => `\`${v.rule}\`: ${v.explanation}`)
                     .join(", ");
-                let badge = `\n\n---\n⚠️ *aisanity: ${recheck.violations.length} issue(s) may remain after correction: ${remaining}. Review manually or ask again.*`;
-                if (verbosity === "debug") {
-                    badge += ` (correction ${correctionElapsed}ms, re-validation ${recheckElapsed}ms)`;
-                    badge += ` \\[validator: ${recheck.backend} / ${recheck.model}\\]`;
-                }
-                badge += "\n";
-                stream.markdown(badge);
+                badge = `\n\n---\n⚠️ *aisanity: ${recheck.violations.length} issue(s) may remain: ${remaining}. Review manually.*`;
+            } else {
+                badge = "\n\n---\n⚡ *Corrected by aisanity (re-validation skipped)*";
             }
-        } catch {
-            stream.markdown(
-                "\n\n---\n⚡ *Corrected by aisanity (re-validation skipped)*\n",
-            );
+            if (verbosity === "debug" && recheck) {
+                badge += ` (correction ${correctionElapsed}ms, re-validation ${recheckElapsed}ms)`;
+                badge += ` \\[${recheck.backend} / ${recheck.model}\\]`;
+            }
+            badge += "\n";
+            stream.markdown(badge);
         }
 
         return {
@@ -328,7 +399,6 @@ export const chatHandler: vscode.ChatRequestHandler = async (
             },
         };
     } catch (err: any) {
-        // Correction failed — show original with violations listed
         stream.markdown(`\n\n❌ *Correction request failed: ${err.message ?? err}*\n`);
         if (verbosity === "minimal" || verbosity === "normal") {
             stream.markdown("\n**Original (unvalidated) response:**\n\n");

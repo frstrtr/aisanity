@@ -1,5 +1,17 @@
 # aisanity — VS Code Extension Changelog
 
+## 0.6.5 — Confirmation Flow + Verbose Original
+
+- **Confirmation dialogs** (`aisanity.confirmCorrections`, default: `true`):
+  - After checker finds violations → popup: **"Auto-Correct?"** / **"Use Original"**
+  - After correction is generated → popup: **"Accept Corrected"** / **"Use Original"** / **"Re-Correct"**
+  - User controls every step — corrections are never silently applied
+- **Original response shown in full** in verbose/debug modes (no longer
+  collapsed in `<details>` — directly visible for comparison)
+- **Re-Correct button** — if correction still has issues and retries remain,
+  the user can explicitly request another correction pass
+- Applied to both model picker and `@aisanity` chat participant
+
 ## 0.6.4 — Verbosity Levels
 
 - **New `aisanity.verbosity` setting** with four levels:
