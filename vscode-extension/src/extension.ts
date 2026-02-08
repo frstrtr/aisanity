@@ -266,6 +266,7 @@ async function healthCheck(): Promise<void> {
 
     // 2. Main model
     const mainModelSetting = config.get<string>("mainModel", "copilot:claude-opus-4.6");
+    let resolvedMainModel: vscode.LanguageModelChat | null = null;
     lines.push(`\n## Main Model (generation)\n`);
     if (mainModelSetting === "ollama") {
         lines.push(`ℹ️ **Main model**: Ollama (same as checker)`);
@@ -283,6 +284,7 @@ async function healthCheck(): Promise<void> {
                 `${m.vendor}:${m.family}` === mainModelSetting
             );
             if (match) {
+                resolvedMainModel = match;
                 lines.push(`✅ **Resolved**: ${match.name} (${match.vendor}/${match.family}, ↓${match.maxInputTokens.toLocaleString()} tokens)`);
             } else {
                 lines.push(`❌ **Not found** — available models:`);
@@ -300,6 +302,8 @@ async function healthCheck(): Promise<void> {
     // 3. Ollama checker
     const ollamaUrl = config.get<string>("ollamaUrl", "http://192.168.86.45:11434");
     const ollamaModel = config.get<string>("ollamaModel", "devstral:24b");
+    let ollamaReachable = false;
+    let ollamaModelAvailable = false;
     lines.push(`\n## Checker Model (validation via Ollama)\n`);
     lines.push(`ℹ️ **Ollama URL**: \`${ollamaUrl}\``);
     lines.push(`ℹ️ **Ollama model**: \`${ollamaModel}\``);
@@ -325,10 +329,11 @@ async function healthCheck(): Promise<void> {
             req.on("timeout", () => { req.destroy(); reject(new Error("timeout")); });
             req.end();
         });
+        ollamaReachable = true;
         lines.push(`✅ **Ollama server**: reachable (v${version})`);
 
         // Check if the specific model is available
-        const modelCheck = await new Promise<boolean>((resolve) => {
+        ollamaModelAvailable = await new Promise<boolean>((resolve) => {
             const parsed2 = new URL(`${ollamaUrl}/api/show`);
             const payload = JSON.stringify({ model: ollamaModel });
             const req = mod.request(parsed2, {
@@ -345,7 +350,7 @@ async function healthCheck(): Promise<void> {
             req.end();
         });
 
-        if (modelCheck) {
+        if (ollamaModelAvailable) {
             lines.push(`✅ **Model \`${ollamaModel}\`**: available`);
         } else {
             lines.push(`❌ **Model \`${ollamaModel}\`**: not found on Ollama server`);
@@ -356,7 +361,95 @@ async function healthCheck(): Promise<void> {
         allOk = false;
     }
 
-    // 4. Settings summary
+    // 4. Live test requests
+    lines.push(`\n## Live Test Requests\n`);
+
+    // 4a. Test main model
+    if (mainModelSetting === "ollama") {
+        // Main model is Ollama — test it together with checker below
+        lines.push(`ℹ️ **Main model test**: same as checker (Ollama)`);
+    } else if (resolvedMainModel) {
+        lines.push(`⏳ Testing main model \`${mainModelSetting}\`…`);
+        try {
+            const testMessages = [
+                vscode.LanguageModelChatMessage.User("Respond with exactly: AISANITY_OK")
+            ];
+            const t0 = Date.now();
+            const response = await resolvedMainModel.sendRequest(testMessages, {}, new vscode.CancellationTokenSource().token);
+            let reply = "";
+            for await (const chunk of response.text) {
+                reply += chunk;
+                if (reply.length > 200) break; // don't need the full response
+            }
+            const elapsed = Date.now() - t0;
+            const preview = reply.trim().slice(0, 80).replace(/\n/g, " ");
+            if (reply.toLowerCase().includes("aisanity_ok")) {
+                lines[lines.length - 1] = `✅ **Main model test**: responded correctly in ${elapsed}ms — \`${preview}\``;
+            } else {
+                lines[lines.length - 1] = `⚠️ **Main model test**: responded in ${elapsed}ms but unexpected reply — \`${preview}\``;
+            }
+        } catch (err: any) {
+            lines[lines.length - 1] = `❌ **Main model test**: failed — ${err.message}`;
+            allOk = false;
+        }
+    } else if (mainModelSetting !== "ollama") {
+        lines.push(`⏭️ **Main model test**: skipped (model not resolved)`);
+    }
+
+    // 4b. Test Ollama checker with a real inference call
+    if (ollamaReachable && ollamaModelAvailable) {
+        lines.push(`⏳ Testing Ollama checker \`${ollamaModel}\`…`);
+        try {
+            const httpMod = await import("http");
+            const httpsMod = await import("https");
+            const parsed = new URL(`${ollamaUrl}/api/chat`);
+            const mod = parsed.protocol === "https:" ? httpsMod : httpMod;
+
+            const payload = JSON.stringify({
+                model: ollamaModel,
+                messages: [{ role: "user", content: "Respond with exactly one word: AISANITY_OK" }],
+                stream: false,
+                options: { temperature: 0, num_predict: 20 },
+            });
+
+            const t0 = Date.now();
+            const ollamaReply = await new Promise<string>((resolve, reject) => {
+                const req = mod.request(parsed, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload).toString() },
+                    timeout: 30_000,
+                }, (res: any) => {
+                    const chunks: Buffer[] = [];
+                    res.on("data", (c: Buffer) => chunks.push(c));
+                    res.on("end", () => {
+                        try {
+                            const body = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+                            resolve(body.message?.content ?? "");
+                        } catch { resolve("(parse error)"); }
+                    });
+                });
+                req.on("error", reject);
+                req.on("timeout", () => { req.destroy(); reject(new Error("timeout (30s)")); });
+                req.write(payload);
+                req.end();
+            });
+            const elapsed = Date.now() - t0;
+            const preview = ollamaReply.trim().slice(0, 80).replace(/\n/g, " ");
+
+            if (ollamaReply.toLowerCase().includes("aisanity_ok")) {
+                lines[lines.length - 1] = `✅ **Ollama checker test**: responded correctly in ${(elapsed / 1000).toFixed(1)}s — \`${preview}\``;
+            } else {
+                lines[lines.length - 1] = `⚠️ **Ollama checker test**: responded in ${(elapsed / 1000).toFixed(1)}s but unexpected reply — \`${preview}\``;
+            }
+        } catch (err: any) {
+            lines[lines.length - 1] = `❌ **Ollama checker test**: failed — ${err.message}`;
+            allOk = false;
+        }
+    } else {
+        lines.push(`⏭️ **Ollama checker test**: skipped (server/model unavailable)`);
+    }
+
+    // 5. Settings summary
     lines.push(`\n## Settings\n`);
     lines.push(`| Setting | Value |`);
     lines.push(`|---------|-------|`);
@@ -366,7 +459,7 @@ async function healthCheck(): Promise<void> {
     lines.push(`| showValidationBadges | ${config.get("showValidationBadges", true)} |`);
     lines.push(`| validationBackend | ${config.get("validationBackend", "ollama")} |`);
 
-    // 5. Overall verdict
+    // 6. Overall verdict
     lines.push(`\n---\n`);
     lines.push(allOk
         ? `## ✅ All systems operational`
