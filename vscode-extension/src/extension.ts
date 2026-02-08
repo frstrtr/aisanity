@@ -79,7 +79,11 @@ class AisanityMcpProvider
         const ollamaUrl = config.get<string>("ollamaUrl", "http://192.168.86.45:11434");
         const ollamaModel = config.get<string>("ollamaModel", "devstral:24b");
         const githubModel = config.get<string>("githubModel", "openai/gpt-4o-mini");
-        const memoryFile = getMemoryFileName();
+
+        // Pass the ABSOLUTE path to the memory file so the MCP server
+        // process can find it regardless of its cwd.
+        const memoryAbsPath = findMemoryFile();
+        const memoryArg = memoryAbsPath ?? getMemoryFileName();
 
         const mcpServerPath = getMcpServerPath();
         if (!fs.existsSync(mcpServerPath)) {
@@ -94,7 +98,7 @@ class AisanityMcpProvider
             "--ollama-url", ollamaUrl,
             "--ollama-model", ollamaModel,
             "--github-model", githubModel,
-            "--memory", memoryFile,
+            "--memory", memoryArg,
         ];
 
         const env: Record<string, string | null> = {};
@@ -112,18 +116,6 @@ class AisanityMcpProvider
         );
 
         return [server];
-    }
-
-    resolveMcpServerDefinition(
-        server: vscode.McpStdioServerDefinition,
-        _token: vscode.CancellationToken
-    ): vscode.ProviderResult<vscode.McpStdioServerDefinition> {
-        // Set cwd to the workspace folder so .ai-memory.md is found
-        const folders = vscode.workspace.workspaceFolders;
-        if (folders && folders.length > 0) {
-            (server as any).cwd = folders[0].uri.fsPath;
-        }
-        return server;
     }
 
     refresh(): void {
@@ -254,6 +246,145 @@ async function validateSelection(): Promise<void> {
     );
 }
 
+// ── Health Check ────────────────────────────────────────────────────────────
+
+async function healthCheck(): Promise<void> {
+    const config = getConfig();
+    const lines: string[] = ["# aisanity Health Check\n"];
+    let allOk = true;
+
+    // 1. Memory file
+    const memoryPath = findMemoryFile();
+    if (memoryPath) {
+        const stat = fs.statSync(memoryPath);
+        const sizeKb = (stat.size / 1024).toFixed(1);
+        lines.push(`✅ **Memory file**: ${memoryPath} (${sizeKb} KB)`);
+    } else {
+        lines.push(`❌ **Memory file**: not found — run \`aisanity: Init Project\``);
+        allOk = false;
+    }
+
+    // 2. Main model
+    const mainModelSetting = config.get<string>("mainModel", "copilot:claude-opus-4.6");
+    lines.push(`\n## Main Model (generation)\n`);
+    if (mainModelSetting === "ollama") {
+        lines.push(`ℹ️ **Main model**: Ollama (same as checker)`);
+    } else {
+        lines.push(`ℹ️ **Main model**: \`${mainModelSetting}\``);
+        try {
+            const models = await vscode.lm.selectChatModels();
+            // Parse vendor:family
+            const parts = mainModelSetting.split(":");
+            const vendor = parts.length >= 2 ? parts[0] : undefined;
+            const family = parts.length >= 2 ? parts.slice(1).join(":") : undefined;
+            const match = models.find(m =>
+                m.id === mainModelSetting ||
+                (vendor && family && m.vendor === vendor && m.family === family) ||
+                `${m.vendor}:${m.family}` === mainModelSetting
+            );
+            if (match) {
+                lines.push(`✅ **Resolved**: ${match.name} (${match.vendor}/${match.family}, ↓${match.maxInputTokens.toLocaleString()} tokens)`);
+            } else {
+                lines.push(`❌ **Not found** — available models:`);
+                const copilotModels = models.filter(m => m.vendor === "copilot").slice(0, 10);
+                for (const m of copilotModels) {
+                    lines.push(`   - \`${m.vendor}:${m.family}\` — ${m.name}`);
+                }
+                allOk = false;
+            }
+        } catch (err: any) {
+            lines.push(`⚠️ Could not query VS Code models: ${err.message}`);
+        }
+    }
+
+    // 3. Ollama checker
+    const ollamaUrl = config.get<string>("ollamaUrl", "http://192.168.86.45:11434");
+    const ollamaModel = config.get<string>("ollamaModel", "devstral:24b");
+    lines.push(`\n## Checker Model (validation via Ollama)\n`);
+    lines.push(`ℹ️ **Ollama URL**: \`${ollamaUrl}\``);
+    lines.push(`ℹ️ **Ollama model**: \`${ollamaModel}\``);
+
+    try {
+        const http = await import("http");
+        const https = await import("https");
+        const parsed = new URL(`${ollamaUrl}/api/version`);
+        const mod = parsed.protocol === "https:" ? https : http;
+
+        const version = await new Promise<string>((resolve, reject) => {
+            const req = mod.request(parsed, { method: "GET", timeout: 5000 }, (res: any) => {
+                const chunks: Buffer[] = [];
+                res.on("data", (c: Buffer) => chunks.push(c));
+                res.on("end", () => {
+                    try {
+                        const body = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+                        resolve(body.version ?? "unknown");
+                    } catch { resolve("unknown"); }
+                });
+            });
+            req.on("error", reject);
+            req.on("timeout", () => { req.destroy(); reject(new Error("timeout")); });
+            req.end();
+        });
+        lines.push(`✅ **Ollama server**: reachable (v${version})`);
+
+        // Check if the specific model is available
+        const modelCheck = await new Promise<boolean>((resolve) => {
+            const parsed2 = new URL(`${ollamaUrl}/api/show`);
+            const payload = JSON.stringify({ model: ollamaModel });
+            const req = mod.request(parsed2, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload).toString() },
+                timeout: 5000
+            }, (res: any) => {
+                res.resume();
+                res.on("end", () => resolve(res.statusCode < 400));
+            });
+            req.on("error", () => resolve(false));
+            req.on("timeout", () => { req.destroy(); resolve(false); });
+            req.write(payload);
+            req.end();
+        });
+
+        if (modelCheck) {
+            lines.push(`✅ **Model \`${ollamaModel}\`**: available`);
+        } else {
+            lines.push(`❌ **Model \`${ollamaModel}\`**: not found on Ollama server`);
+            allOk = false;
+        }
+    } catch (err: any) {
+        lines.push(`❌ **Ollama server**: unreachable — ${err.message}`);
+        allOk = false;
+    }
+
+    // 4. Settings summary
+    lines.push(`\n## Settings\n`);
+    lines.push(`| Setting | Value |`);
+    lines.push(`|---------|-------|`);
+    lines.push(`| enableValidation | ${config.get("enableValidation", true)} |`);
+    lines.push(`| enableAutoCorrection | ${config.get("enableAutoCorrection", true)} |`);
+    lines.push(`| maxCorrectionRetries | ${config.get("maxCorrectionRetries", 1)} |`);
+    lines.push(`| showValidationBadges | ${config.get("showValidationBadges", true)} |`);
+    lines.push(`| validationBackend | ${config.get("validationBackend", "ollama")} |`);
+
+    // 5. Overall verdict
+    lines.push(`\n---\n`);
+    lines.push(allOk
+        ? `## ✅ All systems operational`
+        : `## ⚠️ Issues detected — review items above`);
+
+    // Show in output channel
+    const channel = vscode.window.createOutputChannel("aisanity Health", "markdown");
+    channel.clear();
+    channel.appendLine(lines.join("\n"));
+    channel.show();
+
+    if (allOk) {
+        vscode.window.showInformationMessage("✅ aisanity: All systems operational");
+    } else {
+        vscode.window.showWarningMessage("⚠️ aisanity: Issues detected — see Health Check output");
+    }
+}
+
 // ── Status Bar ──────────────────────────────────────────────────────────────
 
 function createStatusBarItem(): vscode.StatusBarItem {
@@ -313,7 +444,8 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
         vscode.commands.registerCommand("aisanity.init", initProject),
         vscode.commands.registerCommand("aisanity.showMemory", showMemory),
-        vscode.commands.registerCommand("aisanity.validate", validateSelection)
+        vscode.commands.registerCommand("aisanity.validate", validateSelection),
+        vscode.commands.registerCommand("aisanity.healthCheck", healthCheck)
     );
 
     // Status bar

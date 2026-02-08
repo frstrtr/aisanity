@@ -79,6 +79,10 @@
       {
         "command": "aisanity.validate",
         "title": "aisanity: Validate Selection"
+      },
+      {
+        "command": "aisanity.healthCheck",
+        "title": "aisanity: Health Check"
       }
     ],
     "configuration": {
