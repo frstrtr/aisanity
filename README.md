@@ -32,7 +32,7 @@ A lightweight guardian that:
 ┌─────────────────┐     ┌───────────────────────────┐     ┌──────────────┐
 │  User Question  │────▶│  aisanity                 │────▶│  Validated   │
 │                 │     │                           │     │  Response    │
-└─────────────────┘     │  1. Inject project memory │     │  ✅ or ⚠️   │
+└─────────────────┘     │  1. Inject project memory │     │  ✅ or ⚠️    │
                         │  2. Forward to main model │     └──────────────┘
                         │  3. Validate via Ollama   │
                         │  4. Auto-correct if needed│
@@ -44,12 +44,12 @@ A lightweight guardian that:
                         └─────────────────────────┘
                                      │
                    ┌─────────────────┼─────────────────┐
-                   │ MAIN MODEL      │                 │ CHECKER
-          ┌────────┴────────┐              ┌───────────┴───────┐
-          │  VS Code model  │              │  Ollama LLM       │
+                   │ MAIN MODEL                        │ CHECKER
+          ┌────────┴────────┐              ┌───────────┴────────┐
+          │  VS Code model  │              │  Ollama LLM        │
           │  (Copilot, etc) │              │  devstral:24b      │
           │  or Ollama      │              │  LAN server :11434 │
-          └─────────────────┘              └───────────────────┘
+          └─────────────────┘              └────────────────────┘
 ```
 
 ## Three Integration Layers
