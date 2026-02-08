@@ -437,7 +437,7 @@ export class AisanityModelProvider
                 id: "aisanity-guardian",
                 name: modelName,
                 family: "aisanity",
-                version: "0.6.5",
+                version: "0.6.6",
                 tooltip: "Proxies through a main model with automatic project memory validation via Ollama",
                 detail: modelDetail,
                 maxInputTokens: maxInput,
@@ -473,7 +473,9 @@ export class AisanityModelProvider
         const maxRetries = config.get<number>("maxCorrectionRetries", 1);
         const showBadges = config.get<boolean>("showValidationBadges", true);
         const verbosity = config.get<string>("verbosity", "verbose") as "minimal" | "normal" | "verbose" | "debug";
-        const confirmCorrections = config.get<boolean>("confirmCorrections", true);
+        const humanApproval = config.get<string>("humanApproval", "full") as "full" | "confirm-result" | "confirm-start" | "auto";
+        const askBeforeCorrect = humanApproval === "full" || humanApproval === "confirm-start";
+        const askBeforeAccept  = humanApproval === "full" || humanApproval === "confirm-result";
 
         const memoryPath = findMemoryFile();
         const memoryText = memoryPath ? fs.readFileSync(memoryPath, "utf-8") : undefined;
@@ -617,7 +619,7 @@ export class AisanityModelProvider
 
         // ── Confirmation gate: ask user before auto-correcting ──────────
 
-        if (confirmCorrections) {
+        if (askBeforeCorrect) {
             const preAction = await vscode.window.showWarningMessage(
                 `aisanity: ${verdict.violations.length} violation(s) found. Auto-correct?`,
                 { modal: false },
@@ -746,7 +748,7 @@ export class AisanityModelProvider
 
             // ── Confirmation gate: ask user to accept corrected ─────────
 
-            if (confirmCorrections) {
+            if (askBeforeAccept) {
                 const recheckInfo = recheck
                     ? (recheck.is_valid
                         ? "Re-validation: ✅ passed"
@@ -812,7 +814,7 @@ export class AisanityModelProvider
             }
 
             // If re-validation passed or no more retries, we're done
-            if (!confirmCorrections || recheck?.is_valid || attempt + 1 >= maxRetries) {
+            if (!askBeforeAccept || recheck?.is_valid || attempt + 1 >= maxRetries) {
                 return;
             }
 
@@ -1054,7 +1056,7 @@ export class AisanityModelProvider
         emit(`| maxCorrectionRetries | ${config.get("maxCorrectionRetries", 1)} |\n`);
         emit(`| showValidationBadges | ${config.get("showValidationBadges", true)} |\n`);
         emit(`| verbosity | ${config.get("verbosity", "verbose")} |\n`);
-        emit(`| confirmCorrections | ${config.get("confirmCorrections", true)} |\n`);
+        emit(`| humanApproval | ${config.get("humanApproval", "full")} |\n`);
         emit(`| validationBackend | ${config.get("validationBackend", "ollama")} |\n\n`);
 
         // ── 5. Overall verdict ──────────────────────────────────────────

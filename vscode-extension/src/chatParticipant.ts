@@ -109,7 +109,9 @@ export const chatHandler: vscode.ChatRequestHandler = async (
     const maxRetries = config.get<number>("maxCorrectionRetries", 1);
     const showBadges = config.get<boolean>("showValidationBadges", true);
     const verbosity = config.get<string>("verbosity", "verbose") as "minimal" | "normal" | "verbose" | "debug";
-    const confirmCorrections = config.get<boolean>("confirmCorrections", true);
+    const humanApproval = config.get<string>("humanApproval", "full") as "full" | "confirm-result" | "confirm-start" | "auto";
+    const askBeforeCorrect = humanApproval === "full" || humanApproval === "confirm-start";
+    const askBeforeAccept  = humanApproval === "full" || humanApproval === "confirm-result";
     const memoryPath = findMemoryFile();
 
     // ── No memory file or validation disabled → pass through
@@ -242,7 +244,7 @@ export const chatHandler: vscode.ChatRequestHandler = async (
 
     // ── Confirmation gate: ask user before auto-correcting ──────────
 
-    if (confirmCorrections) {
+    if (askBeforeCorrect) {
         const preAction = await vscode.window.showWarningMessage(
             `aisanity: ${verdict.violations.length} violation(s) found. Auto-correct?`,
             { modal: false },
@@ -340,7 +342,7 @@ export const chatHandler: vscode.ChatRequestHandler = async (
 
         // ── Confirmation gate: ask user to accept corrected ─────────
 
-        if (confirmCorrections) {
+        if (askBeforeAccept) {
             const recheckInfo = recheck
                 ? (recheck.is_valid
                     ? "Re-validation: ✅ passed"

@@ -1,5 +1,16 @@
 # aisanity — VS Code Extension Changelog
 
+## 0.6.6 — Human Approval Levels
+
+- **Replaced `confirmCorrections` (boolean) with `aisanity.humanApproval` (enum)**
+  — granular control over how much human involvement the correction flow requires:
+  - `full` **(default)** — ask before correcting AND before accepting the result
+  - `confirm-result` — auto-correct silently, ask before accepting the corrected result
+  - `confirm-start` — ask before starting correction, then auto-accept the result
+  - `auto` — fully automatic, no dialogs at all (disabled by default)
+- Applied to both model picker and `@aisanity` chat participant
+- Health check table updated to show `humanApproval` level
+
 ## 0.6.5 — Confirmation Flow + Verbose Original
 
 - **Confirmation dialogs** (`aisanity.confirmCorrections`, default: `true`):

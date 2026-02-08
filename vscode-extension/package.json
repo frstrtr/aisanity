@@ -2,7 +2,7 @@
   "name": "aisanity",
   "displayName": "aisanity — AI Memory Guardian",
   "description": "Catches AI context drift and hallucination by validating suggestions against a plain-text project memory file (.ai-memory.md)",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "publisher": "frstrtr",
   "license": "MIT",
   "repository": {
@@ -142,10 +142,17 @@
           ],
           "description": "Controls how much detail aisanity shows during validation and correction. 'verbose' (default) shows both original and corrected responses so you can compare."
         },
-        "aisanity.confirmCorrections": {
-          "type": "boolean",
-          "default": true,
-          "description": "Ask for confirmation before applying auto-corrections. When enabled (default), aisanity shows violations and asks whether to auto-correct, then shows the corrected response and asks whether to accept it, use the original, or re-correct."
+        "aisanity.humanApproval": {
+          "type": "string",
+          "default": "full",
+          "enum": ["full", "confirm-result", "confirm-start", "auto"],
+          "enumDescriptions": [
+            "Maximum control — ask before correcting AND before accepting the result (default)",
+            "Auto-correct silently, but ask before accepting the corrected result",
+            "Ask before starting correction, then auto-accept the result",
+            "Fully automatic — no dialogs, correct and accept without asking"
+          ],
+          "description": "Controls how much human involvement is required during the correction flow. 'full' = confirm before & after, 'auto' = no dialogs."
         },
         "aisanity.validationBackend": {
           "type": "string",
