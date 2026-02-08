@@ -437,7 +437,7 @@ export class AisanityModelProvider
                 id: "aisanity-guardian",
                 name: modelName,
                 family: "aisanity",
-                version: "0.6.2",
+                version: "0.6.3",
                 tooltip: "Proxies through a main model with automatic project memory validation via Ollama",
                 detail: modelDetail,
                 maxInputTokens: maxInput,
@@ -461,6 +461,13 @@ export class AisanityModelProvider
         const { url: ollamaUrl, model: ollamaModel } = resolveOllamaConfig(this._groupConfig);
 
         const mainModelSetting = config.get<string>("mainModel", "copilot:claude-opus-4.6");
+
+        // ── Intercept "Health Check" queries ────────────────────────────
+        if (this._isHealthCheckQuery(messages)) {
+            await this._handleHealthCheck(progress, token, config, mainModelSetting, ollamaUrl, ollamaModel);
+            return;
+        }
+
         const enableValidation = config.get<boolean>("enableValidation", true);
         const enableAutoCorrection = config.get<boolean>("enableAutoCorrection", true);
         const maxRetries = config.get<number>("maxCorrectionRetries", 1);
@@ -688,6 +695,230 @@ export class AisanityModelProvider
                 `\n\n---\n⚠️ *aisanity: ${currentVerdict.violations.length} issue(s) may remain after ${maxRetries} correction(s): ${remaining}. Review manually.*\n`,
             ));
         }
+    }
+
+    // ── Health Check helpers ───────────────────────────────────────────
+
+    /**
+     * Detect if the user's last message is a health check request.
+     */
+    private _isHealthCheckQuery(
+        messages: readonly vscode.LanguageModelChatRequestMessage[],
+    ): boolean {
+        // Find the last user message
+        for (let i = messages.length - 1; i >= 0; i--) {
+            if (messages[i].role === vscode.LanguageModelChatMessageRole.User) {
+                let text = "";
+                for (const part of messages[i].content) {
+                    if (part instanceof vscode.LanguageModelTextPart) {
+                        text += part.value;
+                    }
+                }
+                const normalized = text.trim().toLowerCase().replace(/[^a-z0-9\s]/g, "");
+                return /^(aisanity\s+)?health\s*check$/.test(normalized)
+                    || /^(aisanity\s+)?status$/.test(normalized);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Run an inline health check — reports model reachability and response
+     * status directly into the chat stream.
+     */
+    private async _handleHealthCheck(
+        progress: vscode.Progress<vscode.LanguageModelTextPart | vscode.LanguageModelToolCallPart>,
+        token: vscode.CancellationToken,
+        config: vscode.WorkspaceConfiguration,
+        mainModelSetting: string,
+        ollamaUrl: string,
+        ollamaModel: string,
+    ): Promise<void> {
+        const emit = (text: string) => progress.report(new vscode.LanguageModelTextPart(text));
+
+        emit("# aisanity Health Check\n\n");
+
+        // ── 1. Memory file ──────────────────────────────────────────────
+        const memoryPath = findMemoryFile();
+        if (memoryPath) {
+            const stat = fs.statSync(memoryPath);
+            const sizeKb = (stat.size / 1024).toFixed(1);
+            emit(`✅ **Memory file**: \`${memoryPath}\` (${sizeKb} KB)\n\n`);
+        } else {
+            emit("❌ **Memory file**: not found — run `aisanity: Init Project`\n\n");
+        }
+
+        // ── 2. Main model (generation) ──────────────────────────────────
+        emit("## Main Model (generation)\n\n");
+        emit(`ℹ️ **Configured**: \`${mainModelSetting}\`\n\n`);
+
+        if (mainModelSetting === "ollama") {
+            emit("ℹ️ Main model is Ollama — tested below with checker.\n\n");
+        } else {
+            // Try to resolve the VS Code model
+            const selector = parseMainModel(mainModelSetting);
+            const resolved = await resolveVscodeModel(selector);
+            if (!resolved) {
+                emit(`❌ **Resolved**: not found in VS Code model registry\n\n`);
+                try {
+                    const all = await vscode.lm.selectChatModels();
+                    const copilotModels = all.filter(m => m.vendor === "copilot").slice(0, 8);
+                    if (copilotModels.length > 0) {
+                        emit("Available models:\n");
+                        for (const m of copilotModels) {
+                            emit(`- \`${m.vendor}:${m.family}\` — ${m.name}\n`);
+                        }
+                        emit("\n");
+                    }
+                } catch { /* ignore */ }
+            } else {
+                emit(`✅ **Resolved**: ${resolved.name} (\`${resolved.vendor}/${resolved.family}\`, ↓${resolved.maxInputTokens.toLocaleString()} tokens)\n\n`);
+
+                // Live test — send a probe message
+                if (!token.isCancellationRequested) {
+                    emit("⏳ Sending test request…\n\n");
+                    try {
+                        const testMessages = [
+                            vscode.LanguageModelChatMessage.User("Respond with exactly: AISANITY_OK"),
+                        ];
+                        const t0 = Date.now();
+                        const resp = await resolved.sendRequest(testMessages, {}, token);
+                        let reply = "";
+                        for await (const chunk of resp.text) {
+                            reply += chunk;
+                            if (reply.length > 200) break;
+                        }
+                        const elapsed = Date.now() - t0;
+                        const preview = reply.trim().slice(0, 80).replace(/\n/g, " ");
+                        if (reply.toLowerCase().includes("aisanity_ok")) {
+                            emit(`✅ **Test**: responded correctly in ${elapsed}ms — \`${preview}\`\n\n`);
+                        } else {
+                            emit(`⚠️ **Test**: responded in ${elapsed}ms but unexpected reply — \`${preview}\`\n\n`);
+                        }
+                    } catch (err: any) {
+                        emit(`❌ **Test**: failed — ${err.message ?? err}\n\n`);
+                    }
+                }
+            }
+        }
+
+        if (token.isCancellationRequested) return;
+
+        // ── 3. Ollama checker (validation) ──────────────────────────────
+        emit("## Checker Model (validation via Ollama)\n\n");
+        emit(`ℹ️ **URL**: \`${ollamaUrl}\`\n`);
+        emit(`ℹ️ **Model**: \`${ollamaModel}\`\n\n`);
+
+        let ollamaReachable = false;
+        let ollamaModelAvailable = false;
+
+        // 3a. Check Ollama server reachability
+        try {
+            const parsed = new URL(`${ollamaUrl}/api/version`);
+            const isHttps = parsed.protocol === "https:";
+            const mod = isHttps ? https : http;
+
+            const version = await new Promise<string>((resolve, reject) => {
+                const req = mod.request(parsed, { method: "GET", timeout: 5000 }, (res) => {
+                    const chunks: Buffer[] = [];
+                    res.on("data", (c: Buffer) => chunks.push(c));
+                    res.on("end", () => {
+                        try {
+                            const body = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+                            resolve(body.version ?? "unknown");
+                        } catch { resolve("unknown"); }
+                    });
+                });
+                req.on("error", reject);
+                req.on("timeout", () => { req.destroy(); reject(new Error("timeout")); });
+                req.end();
+            });
+            ollamaReachable = true;
+            emit(`✅ **Server**: reachable (v${version})\n`);
+        } catch (err: any) {
+            emit(`❌ **Server**: unreachable — ${err.message ?? err}\n\n`);
+        }
+
+        // 3b. Check model availability
+        if (ollamaReachable) {
+            try {
+                const parsed = new URL(`${ollamaUrl}/api/show`);
+                const isHttps = parsed.protocol === "https:";
+                const mod = isHttps ? https : http;
+                const payload = JSON.stringify({ model: ollamaModel });
+
+                ollamaModelAvailable = await new Promise<boolean>((resolve) => {
+                    const req = mod.request(parsed, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "Content-Length": Buffer.byteLength(payload).toString(),
+                        },
+                        timeout: 5000,
+                    }, (res) => {
+                        res.resume();
+                        res.on("end", () => resolve((res.statusCode ?? 500) < 400));
+                    });
+                    req.on("error", () => resolve(false));
+                    req.on("timeout", () => { req.destroy(); resolve(false); });
+                    req.write(payload);
+                    req.end();
+                });
+
+                if (ollamaModelAvailable) {
+                    emit(`✅ **Model \`${ollamaModel}\`**: available\n\n`);
+                } else {
+                    emit(`❌ **Model \`${ollamaModel}\`**: not found on server\n\n`);
+                }
+            } catch {
+                emit(`❌ **Model \`${ollamaModel}\`**: check failed\n\n`);
+            }
+        }
+
+        // 3c. Live inference test
+        if (ollamaReachable && ollamaModelAvailable && !token.isCancellationRequested) {
+            emit("⏳ Sending test inference to Ollama…\n\n");
+            try {
+                const t0 = Date.now();
+                const reply = await ollamaChat(
+                    ollamaUrl,
+                    ollamaModel,
+                    [{ role: "user", content: "Respond with exactly one word: AISANITY_OK" }],
+                    token,
+                );
+                const elapsed = Date.now() - t0;
+                const preview = reply.trim().slice(0, 80).replace(/\n/g, " ");
+
+                if (reply.toLowerCase().includes("aisanity_ok")) {
+                    emit(`✅ **Inference test**: responded correctly in ${(elapsed / 1000).toFixed(1)}s — \`${preview}\`\n\n`);
+                } else {
+                    emit(`⚠️ **Inference test**: responded in ${(elapsed / 1000).toFixed(1)}s but unexpected reply — \`${preview}\`\n\n`);
+                }
+            } catch (err: any) {
+                emit(`❌ **Inference test**: failed — ${err.message ?? err}\n\n`);
+            }
+        } else if (!ollamaReachable || !ollamaModelAvailable) {
+            emit("⏭️ **Inference test**: skipped (server/model unavailable)\n\n");
+        }
+
+        // ── 4. Settings summary ─────────────────────────────────────────
+        emit("## Settings\n\n");
+        emit("| Setting | Value |\n");
+        emit("|---------|-------|\n");
+        emit(`| enableValidation | ${config.get("enableValidation", true)} |\n`);
+        emit(`| enableAutoCorrection | ${config.get("enableAutoCorrection", true)} |\n`);
+        emit(`| maxCorrectionRetries | ${config.get("maxCorrectionRetries", 1)} |\n`);
+        emit(`| showValidationBadges | ${config.get("showValidationBadges", true)} |\n`);
+        emit(`| validationBackend | ${config.get("validationBackend", "ollama")} |\n\n`);
+
+        // ── 5. Overall verdict ──────────────────────────────────────────
+        emit("---\n\n");
+        const hasMemory = !!memoryPath;
+        const mainOk = mainModelSetting === "ollama" || (await resolveVscodeModel(parseMainModel(mainModelSetting))) !== null;
+        const allOk = hasMemory && mainOk && ollamaReachable && ollamaModelAvailable;
+        emit(allOk
+            ? "## ✅ All systems operational\n"
+            : "## ⚠️ Issues detected — review items above\n");
     }
 
     async provideTokenCount(

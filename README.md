@@ -125,7 +125,7 @@ tools during conversations. This is voluntary — the model decides when to vali
 ### Option 1: VS Code Extension (recommended)
 
 ```bash
-code --install-extension vscode-extension/aisanity-0.6.2.vsix
+code --install-extension vscode-extension/aisanity-0.6.3.vsix
 ```
 
 Then:

@@ -13,7 +13,7 @@
 
 ```bash
 cd ~/Github/aisanity
-code --install-extension vscode-extension/aisanity-0.6.2.vsix
+code --install-extension vscode-extension/aisanity-0.6.3.vsix
 ```
 
 After installing, verify your setup:

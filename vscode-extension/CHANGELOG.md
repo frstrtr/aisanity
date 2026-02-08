@@ -1,5 +1,20 @@
 # aisanity — VS Code Extension Changelog
 
+## 0.6.3 — Inline Health Check in Model Picker
+
+- **Inline health check** — typing "Health Check" or "status" in chat while
+  aisanity is selected as the model now shows a full diagnostic report
+  directly in the chat response instead of being treated as a normal prompt:
+  - Memory file: found/missing, path, size
+  - Main model: resolution status + live test request with response time
+  - Ollama checker: server reachability (version), model availability,
+    live inference test with response time and actual reply
+  - Settings summary table
+  - Overall verdict (✅ all ok / ⚠️ issues detected)
+- Previously, "Health Check" was only available as a Command Palette command
+  that wrote to an Output Channel — now it works naturally from the chat
+  when using aisanity from the model picker
+
 ## 0.6.2 — Health Check, MCP Fix, Updated Docs
 
 - **Health Check command** — run `aisanity: Health Check` from the Command
