@@ -50,6 +50,17 @@ class Verdict:
     error: str = ""
 
 
+@dataclass
+class CompressionResult:
+    compressed: str          # the compressed context ready to paste into Claude
+    original_tokens: int     # rough estimate of input token count
+    compressed_tokens: int   # rough estimate of output token count
+    savings_pct: int         # percentage reduction
+    backend: str = ""
+    model: str = ""
+    error: str = ""
+
+
 VERDICT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -218,6 +229,179 @@ INSTRUCTIONS:
 4. Be concise but complete.
 5. Return ONLY the correction text — no JSON, no markdown fences."""
 
+
+# ── Context Compression ──────────────────────────────────────────────────────
+
+COMPRESS_SYSTEM_PROMPT = """\
+You are a Context Compression Engine for a C++ software project.
+Your job is to reduce a large AI context payload so it fits within a smaller
+context window, while preserving ALL information Claude needs to continue the
+task without asking clarifying questions.
+
+COMPRESSION RULES — apply ALL of them:
+
+1. UNCHANGED FILES
+   - If a file has no active TODOs, no recent edits mentioned, and no open
+     questions: replace its entire content with one line:
+     [FILE: path/to/file.cpp | purpose: <10-word description> | status: unchanged]
+   - Keep full content only for files explicitly being edited or referenced.
+
+2. BUILD ARTIFACTS & HEADERS
+   - Drop any content that looks like compiler output, linker output, CMake
+     configure logs, or generated headers (.pb.h, moc_*.cpp, qrc_*.cpp).
+   - Replace with: [BUILD OUTPUT: omitted — not relevant to task]
+
+3. CONVERSATION HISTORY
+   - Keep: architecture decisions, constraints agreed upon, open questions,
+     explicit user instructions, error messages being debugged.
+   - Drop: verbose back-and-forth, "sounds good", "let me know", repeated
+     explanations of the same concept, superseded plans.
+   - Summarize dropped turns as: [N turns summarized: <1-sentence outcome>]
+
+4. TOOL RESULTS
+   - Keep: final conclusions, error messages, test failures, file paths found.
+   - Drop: raw grep output > 20 lines, full directory listings, verbose logs.
+   - Replace dropped output with: [TOOL OUTPUT: <1-sentence summary>]
+
+5. PRESERVE EXACTLY AS-IS (never compress these):
+   - The current task description / user's last instruction
+   - Any code currently being written or reviewed
+   - All error messages and stack traces
+   - All explicit user constraints and decisions
+   - The .ai-memory.md project rules if present
+
+OUTPUT FORMAT:
+- Return ONLY the compressed context — no preamble, no explanation.
+- Add a single header line at the top:
+  [COMPRESSED by aisanity | ~{original_tokens} → ~{compressed_tokens} tokens | {savings_pct}% saved]
+- Preserve all markdown formatting in kept sections."""
+
+
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate: ~4 chars per token for English/code mix."""
+    return max(1, len(text) // 4)
+
+
+# ── ContextCompressor ────────────────────────────────────────────────────────
+
+class ContextCompressor:
+    """
+    Compresses large AI context payloads using a local Ollama model.
+    Designed to reduce C++ project contexts from 300-500K tokens to
+    under 150K before sending to Claude API.
+    """
+
+    def __init__(
+        self,
+        ollama_url: str = OLLAMA_URL,
+        ollama_model: str = OLLAMA_MODEL,
+        github_model: str = GITHUB_MODEL,
+        github_token: Optional[str] = None,
+    ):
+        self.backends = [
+            OllamaBackend(base_url=ollama_url, model=ollama_model),
+            GitHubModelsBackend(model=github_model, token=github_token),
+        ]
+
+    def compress(self, context: str) -> CompressionResult:
+        """
+        Compress a context payload via Ollama devstral:24b.
+        Falls back to GitHub Models if Ollama is unreachable.
+
+        Args:
+            context: The raw context to compress. Can include file contents,
+                     conversation history, tool results — anything you'd
+                     normally paste into Claude.
+
+        Returns:
+            CompressionResult with compressed text and token stats.
+        """
+        original_tokens = _estimate_tokens(context)
+
+        system = COMPRESS_SYSTEM_PROMPT.replace(
+            "{original_tokens}", str(original_tokens)
+        ).replace(
+            "{compressed_tokens}", "?"
+        ).replace(
+            "{savings_pct}", "?"
+        )
+
+        user = (
+            f"Compress the following context. Apply ALL compression rules.\n\n"
+            f"=== CONTEXT TO COMPRESS ===\n\n{context}"
+        )
+
+        last_error = ""
+        for backend in self.backends:
+            if not backend.is_available():
+                last_error = f"{backend.name}: not available"
+                _log(f"⏭  {backend.name} not available for compression, trying next…")
+                continue
+            try:
+                _log(f"🗜  Compressing via {backend.name} ({backend.model})…")
+                compressed = self._freeform_chat(backend, system, user)
+
+                compressed_tokens = _estimate_tokens(compressed)
+                savings_pct = max(0, int(
+                    (1 - compressed_tokens / original_tokens) * 100
+                ))
+
+                # Patch the header line with real numbers
+                compressed = re.sub(
+                    r"\[COMPRESSED by aisanity.*?\]",
+                    f"[COMPRESSED by aisanity | ~{original_tokens} → ~{compressed_tokens} tokens | {savings_pct}% saved]",
+                    compressed,
+                )
+
+                return CompressionResult(
+                    compressed=compressed,
+                    original_tokens=original_tokens,
+                    compressed_tokens=compressed_tokens,
+                    savings_pct=savings_pct,
+                    backend=backend.name,
+                    model=backend.model,
+                )
+            except (urllib.error.URLError, OSError, json.JSONDecodeError,
+                    RuntimeError, ValueError, KeyError) as exc:
+                last_error = f"{backend.name}: {exc}"
+                _log(f"⚠️  {backend.name} compression failed: {exc}")
+                continue
+
+        return CompressionResult(
+            compressed=context,  # return original on total failure
+            original_tokens=original_tokens,
+            compressed_tokens=original_tokens,
+            savings_pct=0,
+            error=f"All backends failed. Last error: {last_error}",
+        )
+
+    def _freeform_chat(self, backend, system: str, user: str) -> str:
+        """Send a freeform chat (no JSON schema) to any backend."""
+        if isinstance(backend, OllamaBackend):
+            payload = json.dumps({
+                "model": backend.model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user",   "content": user},
+                ],
+                "stream": False,
+                "options": {"temperature": 0.1},
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                f"{backend.base_url}/api/chat",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+            return result["message"]["content"]
+
+        # GitHub Models
+        return backend.chat(system, user)
+
+
+# ── MemoryGuardian ────────────────────────────────────────────────────────────
 
 class MemoryGuardian:
     """
@@ -433,6 +617,23 @@ def format_correction(correction: str) -> str:
     )
 
 
+def format_compression(result: CompressionResult) -> str:
+    """Format a CompressionResult for display."""
+    if result.error:
+        return f"⚠️  COMPRESSION ERROR: {result.error}\n\n{result.compressed}"
+    border = "━" * 55
+    header = (
+        f"🗜  COMPRESSED CONTEXT\n"
+        f"{border}\n"
+        f"  Original : ~{result.original_tokens:,} tokens\n"
+        f"  Compressed: ~{result.compressed_tokens:,} tokens\n"
+        f"  Saved    : {result.savings_pct}%\n"
+        f"  Backend  : {result.backend} / {result.model}\n"
+        f"{border}\n\n"
+    )
+    return header + result.compressed
+
+
 # ── Project Init ─────────────────────────────────────────────────────────────
 
 AISANITY_DIR = Path(__file__).resolve().parent
@@ -533,7 +734,6 @@ def _init_project(target_dir: str = ".") -> None:
 def _install_global() -> None:
     """Install aisanity MCP server into VS Code dedicated user MCP config."""
     home = Path.home()
-    # VS Code uses a dedicated mcp.json (not settings.json) since late 2025
     candidates = [
         home / ".config" / "Code" / "User" / "mcp.json",
         home / ".config" / "Code - Insiders" / "User" / "mcp.json",
@@ -546,7 +746,6 @@ def _install_global() -> None:
         if p.exists():
             mcp_path = p
             break
-        # Also check if the parent (User dir) exists — we can create mcp.json there
         if p.parent.exists():
             mcp_path = p
             break
@@ -630,7 +829,6 @@ def main() -> None:
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    # ── init subcommand
     init_parser = subparsers.add_parser(
         "init",
         help="Initialize aisanity in a project (creates .ai-memory.md + .vscode/mcp.json)",
@@ -642,13 +840,11 @@ def main() -> None:
         help="Project directory (default: current directory)",
     )
 
-    # ── install-global subcommand
     subparsers.add_parser(
         "install-global",
         help="Add aisanity MCP server to VS Code global user settings (all projects)",
     )
 
-    # ── validate (default behavior)
     parser.add_argument(
         "suggestion",
         nargs="*",
@@ -698,7 +894,6 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # -- Subcommands
     if args.command == "init":
         _init_project(args.target)
         return
@@ -717,12 +912,10 @@ def main() -> None:
         github_token=github_token,
     )
 
-    # -- Show memory
     if args.show_memory:
         print(guardian.show_memory())
         return
 
-    # -- Read suggestion
     if args.check:
         suggestion = sys.stdin.read()
     elif args.suggestion:
@@ -735,10 +928,8 @@ def main() -> None:
         print("Error: empty suggestion", file=sys.stderr)
         sys.exit(1)
 
-    # -- Validate
     verdict = guardian.validate(suggestion)
 
-    # -- Output
     if args.json_output:
         out = asdict(verdict)
         out["violations"] = [asdict(v) for v in verdict.violations]
@@ -748,7 +939,6 @@ def main() -> None:
         print(json.dumps(out, indent=2))
     else:
         print(format_verdict(verdict))
-        # Generate correction prompt if --fix and violations found
         if args.fix and not verdict.is_valid:
             correction = guardian.generate_correction(suggestion, verdict)
             if correction:
